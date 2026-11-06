@@ -19,7 +19,7 @@ from .auth import passwords, DUMMY_HASH, current_user, issue_session, digest, be
 from .seed import seed
 from .research import composite, opinion_score, state, signals, backtest, classify_rules, WEIGHTS
 from .ingestion import record_post, classify_revision
-from .live import source_status, live_analysis, live_catalog
+from .live import source_status, live_analysis, live_catalog, snapshot_timeline, live_rankings
 from .eastmoney import IID, stock
 from .miaoxiang import router as mx_router
 
@@ -98,6 +98,16 @@ def live_status(instrument_id:str=Query(IID,max_length=64),content:Literal['titl
 def real_analysis(days:int=Query(1,ge=1,le=30),instrument_id:str=Query(IID,max_length=64),content:Literal['titles','body']='titles',db=Depends(get_db)):
     validate_live(instrument_id)
     return live_analysis(db,days=days,iid=instrument_id,content=content)
+
+@app.get('/api/live/timeline')
+def real_timeline(instrument_id:str=Query(IID,max_length=64),content:Literal['titles','body']='titles',db=Depends(get_db)):
+    validate_live(instrument_id)
+    return snapshot_timeline(db,iid=instrument_id,content=content)
+
+@app.get('/api/live/rankings')
+def real_rankings(days:int=Query(3,ge=1,le=30),content:Literal['titles','body']='titles',
+                  sort:Literal['opinion_score','bullish_pct','bearish_pct','effective_posts']='opinion_score',db=Depends(get_db)):
+    return live_rankings(db,days=days,content=content,sort=sort)
 
 @app.get('/api/instruments')
 def instruments(q:str='', kind:Literal['all','market','index','stock','sector']='all', db=Depends(get_db)):

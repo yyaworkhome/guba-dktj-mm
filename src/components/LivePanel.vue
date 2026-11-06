@@ -2,6 +2,8 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { RefreshCw, Database, ExternalLink } from 'lucide-vue-next';
 import { request } from '../api';
+import LiveHistory from './LiveHistory.vue';
+import LiveRankings from './LiveRankings.vue';
 
 interface LiveData {
   instrument_id: string; name: string; code: string; content: string; source_url: string; collector_command: string;
@@ -28,6 +30,10 @@ let version = 0;
 const names: Record<string, string> = { bullish: '看多', bearish: '看空', neutral: '中性 / 未识别' };
 const statusNames: Record<string, string> = { success: '采集成功', partial: '部分采集失败', failed: '采集失败', running: '采集中' };
 const lastBar = computed(() => data.value?.quote?.bars.at(-1));
+const historyPanel = ref<InstanceType<typeof LiveHistory> | null>(null);
+const rankingPanel = ref<InstanceType<typeof LiveRankings> | null>(null);
+async function refresh() { await Promise.all([load(), historyPanel.value?.load(), rankingPanel.value?.load()]); }
+async function selectRanked(id: string) { instrumentId.value = id; stockQuery.value = ''; await load(); }
 function time(s: string | null | undefined) {
   return s ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(s)) : '尚未采集';
 }
@@ -59,7 +65,7 @@ onUnmounted(() => { version++; });
     <section class="panel live-intro">
       <div class="panel-heading">
         <div><p class="live-eyebrow"><Database :size="14" />真实采样 · 规则分类</p><h2>{{ selectedStock?.name || data?.name || '东方财富' }} <span class="subtle">{{ instrumentId }} · {{ scopeName }}口径</span></h2></div>
-        <button class="secondary compact" :disabled="busy" @click="load()"><RefreshCw :size="14" :class="{ spin: busy }" />刷新已采集数据</button>
+        <button class="secondary compact" :disabled="busy" @click="refresh()"><RefreshCw :size="14" :class="{ spin: busy }" />刷新已采集数据</button>
       </div>
       <p class="subtle live-description">已开放5只股票，标题与正文分别统计，行情为未复权日线；大盘、板块等入口仍为演示分析。</p>
       <label class="live-search-label" for="live-stock-search">输入个股代码或名称</label>
@@ -67,7 +73,7 @@ onUnmounted(() => { version++; });
       <div class="live-stock-options" role="group" aria-label="选择真实采样股票">
         <button v-for="s in filteredStocks" :key="s.id" :class="['secondary', { selected: instrumentId === s.id }]" :aria-pressed="instrumentId === s.id" @click="chooseStock(s)">{{ s.name }} <small>{{ s.code }} · {{ s.exchange === 'XSHG' ? '上交所' : '深交所' }}</small></button>
       </div>
-      <p v-if="!filteredStocks.length && stocks.length" class="subtle">未找到已开放股票。此入口只查询个股，000001对应深交所平安银行；上证指数仍在大盘演示入口。</p>
+      <p v-if="!filteredStocks.length && stocks.length" class="subtle">未找到已开放股票。此入口只查询个股，000001对应深交所平安银行；上证指数行情可在妙想入口查询。</p>
       <div class="period-options live-periods" role="group" aria-label="内容口径">
         <button :class="{selected: content === 'titles'}" :aria-pressed="content === 'titles'" @click="chooseContent('titles')">标题采样</button>
         <button :class="{selected: content === 'body'}" :aria-pressed="content === 'body'" @click="chooseContent('body')">正文采样 · 每批最多5条</button>
@@ -104,10 +110,12 @@ onUnmounted(() => { version++; });
         <div class="panel"><h2>日线行情观察</h2><template v-if="lastBar"><p class="live-price">{{ lastBar.close.toFixed(2) }} <small>元 · {{ lastBar.date }}</small></p><p class="subtle">当日开盘 {{ lastBar.open.toFixed(2) }} · 未复权<br />观察时间 {{ time(data.quote?.observed_at) }}<br />{{ lastBar.is_current_session ? '包含当前交易日数据，盘中可能未收盘。' : '当前仅展示最近保存的历史日线。' }}</p></template><p v-else class="empty-note">尚无可用行情观察。</p><p class="subtle live-description">暂不计算价格背离及真实回测，等待持续积累可用时点一致的情绪快照。</p></div>
         <div class="panel"><h2>行为标签词频</h2><div class="live-tags"><span v-for="tag in data.keywords" :key="tag.text">{{ tag.text }} <b>{{ tag.count }}</b></span><p v-if="!data.keywords.length" class="subtle">未识别到预设行为词。</p></div><p class="subtle">仅统计当前口径中出现的规则标签，不等同于完整语义判断。</p></div>
       </section>
-      <section class="panel"><h2>已采样日期明细</h2><p class="subtle">{{ data.range.join(' 至 ') }} · 北京时间自然日；空缺日期不补零</p><div class="live-history"><div v-for="point in data.trend" :key="point.date"><span>{{ point.date }}</span><span>{{ point.posts }} 条有效{{ scopeName }}</span><b>舆论分 {{ point.opinion_score ?? '—' }}</b></div></div></section>
+      <section class="panel"><h2>按发帖日期分组</h2><p class="subtle">{{ data.range.join(' 至 ') }} · 按当前已采集内容的发布时间分组，非当日实时信号；空缺日期不补零</p><div class="live-history"><div v-for="point in data.trend" :key="point.date"><span>{{ point.date }}</span><span>{{ point.posts }} 条有效{{ scopeName }}</span><b>舆论分 {{ point.opinion_score ?? '—' }}</b></div></div></section>
       <section v-if="data.examples.length" class="panel"><h2>样本溯源 · 最近5条有效{{ scopeName }}</h2><p class="subtle">以下为文本摘录，首次发现与修订观察时间均可核对。</p><article v-for="sample in data.examples" :key="sample.source_id" class="live-example"><div class="panel-heading"><a :href="sample.url" target="_blank" rel="noopener noreferrer">源帖 {{ sample.source_id }} ↗</a><span>{{ names[sample.label] }}</span></div><p class="live-excerpt">{{ sample.excerpt }}</p><small>发布 {{ time(sample.published_at) }} · 首次发现 {{ time(sample.first_seen_at) }} · 修订观察 {{ time(sample.observed_at) }}</small></article></section>
       <details class="panel live-method"><summary>查看采样与统计口径</summary><ul><li v-for="note in data.limitations" :key="note">{{ note }}</li></ul><p class="subtle">内容去重移除 {{ data.removed.duplicate_content || 0 }} 条；作者上限移除 {{ data.removed.author_cap || 0 }} 条。每位作者每天最多计3条，互动量不参与方向加权。</p></details>
     </template>
+    <LiveHistory ref="historyPanel" :instrument-id="instrumentId" :content="content" />
+    <LiveRankings ref="rankingPanel" :days="days" :content="content" @select="selectRanked" />
   </div>
 </template>
 

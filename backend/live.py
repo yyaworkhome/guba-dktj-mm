@@ -3,7 +3,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from .eastmoney import IID, SOURCE, BODY_SOURCE, CST, STOCKS, stock, list_url
-from .models import Post, PostRevision, Classification, CollectionRun, QuoteObservation
+from .models import Post, PostRevision, Classification, CollectionRun, QuoteObservation, Snapshot
 from .research import utc, opinion_score, content_hash
 
 def run_dict(run):
@@ -29,6 +29,69 @@ def source_status(db, iid=IID, content='titles'):
     return {'instrument_id': iid, 'source': source, 'latest_run': run_dict(latest),
         'collection': '手动限频采样；刷新页面只读取本地数据库，不发起源站请求。',
         'scope': '股吧首页普通讨论' + ('标题采样；不含正文。' if content == 'titles' else '正文限量采样；不含评论内容。')}
+
+
+RANK_MINIMUMS = {'effective_posts': 20, 'authors': 10, 'directional_posts': 10}
+
+
+def snapshot_timeline(db, iid=IID, content='titles', as_of=None, days=30):
+    """Saved collection-time values only. Never recreate a historical point from current posts."""
+    stock(iid); source = source_for(content)
+    cutoff = as_of or datetime.now(timezone.utc)
+    start = cutoff - timedelta(days=days)
+    points = []
+    rows = db.scalars(select(Snapshot).where(Snapshot.instrument_id == iid, Snapshot.data_mode == 'live',
+        Snapshot.available_at >= start, Snapshot.available_at <= cutoff, Snapshot.created_at <= cutoff)
+        .order_by(Snapshot.available_at, Snapshot.id))
+    for row in rows:
+        metrics = row.metrics
+        if metrics.get('source') != source or metrics.get('instrument_id') != iid:
+            continue
+        if metrics.get('content', 'titles') != content:
+            continue
+        counts = metrics.get('counts', {})
+        n = metrics.get('effective_posts', 0)
+        directional = counts.get('bullish', 0) + counts.get('bearish', 0)
+        points.append({'id': row.id, 'available_at': utc(row.available_at).isoformat(),
+            'session_date': row.session_date, 'version': row.version,
+            'opinion_score': metrics.get('opinion_score') if n and directional else None,
+            'effective_posts': n, 'directional_posts': directional, 'authors': metrics.get('authors', 0),
+            'window_days': metrics.get('days'), 'range': metrics.get('range'),
+            'counts': {k: counts.get(k, 0) for k in ('bullish', 'bearish', 'neutral')}})
+    # Bound the UI without averaging or changing historical values.
+    return {'instrument_id': iid, 'content': content, 'as_of': cutoff.isoformat(),
+        'points': points[-200:], 'total_points': len(points), 'truncated': len(points) > 200,
+        'basis': '最近30天内保存的采集时点快照，每点保留当时统计窗口；无方向样本显示缺失，不与发帖日期分组混用。'}
+
+
+def live_rankings(db, days=3, content='titles', sort='opinion_score', as_of=None):
+    if sort not in ('opinion_score', 'bullish_pct', 'bearish_pct', 'effective_posts'):
+        raise ValueError('不支持的排行榜排序')
+    cutoff = as_of or datetime.now(timezone.utc)
+    rows = []
+    for instrument in live_catalog():
+        a = live_analysis(db, days=days, as_of=cutoff, iid=instrument['id'], content=content)
+        directional = a['counts']['bullish'] + a['counts']['bearish']
+        reasons = []
+        for key, label, value in [('effective_posts', '有效样本', a['effective_posts']),
+                                 ('authors', '有效作者', a['authors']), ('directional_posts', '方向样本', directional)]:
+            if value < RANK_MINIMUMS[key]: reasons.append(f'{label}{value}，少于{RANK_MINIMUMS[key]}')
+        if a['stale']: reasons.append('尚未采集或观察超过24小时')
+        rows.append({**instrument, 'counts': a['counts'], 'effective_posts': a['effective_posts'],
+            'authors': a['authors'], 'directional_posts': directional, 'opinion_score': a['opinion_score'],
+            'bullish_pct': a['percentages']['bullish'], 'bearish_pct': a['percentages']['bearish'],
+            'last_observation': a['last_post_observation'], 'stale': a['stale'], 'eligible': not reasons,
+            'reasons': reasons})
+    ranked = sorted((r for r in rows if r['eligible']),
+                    key=lambda r: (-(r[sort] if r[sort] is not None else -1), r['id']))
+    for i, r in enumerate(ranked, 1): r['rank'] = i
+    return {'data_mode': 'live', 'as_of': cutoff.isoformat(), 'days': days, 'content': content,
+        'sort': sort, 'minimums': RANK_MINIMUMS, 'ranked': ranked,
+        'unranked': [r for r in rows if not r['eligible']], 'scope_size': len(STOCKS),
+        'scope': '仅5只白名单股票，同一自然日窗口与内容口径；不是全市场排名。',
+        'limitations': ['最低样本门槛为开发阈值，未完成统计校准；达标不代表具有预测价值。',
+            '不同股吧采集时间与选择偏差仍可能不同；排序只比较已保存的有限样本。',
+            '有效样本量不是单位时间新增发帖量，不代表热度增长；不计算升温或收益预测。']}
 
 def live_analysis(db, days=1, as_of=None, iid=IID, content='titles'):
     code, name, _ = stock(iid); source = source_for(content)
