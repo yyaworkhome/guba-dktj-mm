@@ -22,6 +22,7 @@ from .ingestion import record_post, classify_revision
 from .live import source_status, live_analysis, live_catalog, snapshot_timeline, live_rankings
 from .eastmoney import IID, stock
 from .miaoxiang import router as mx_router
+from .live_private import router as live_private_router
 
 @asynccontextmanager
 async def lifespan(app):
@@ -32,6 +33,7 @@ async def lifespan(app):
 
 app = FastAPI(title='散户情绪量化 API', version='2.0.0', lifespan=lifespan)
 app.include_router(mx_router)
+app.include_router(live_private_router)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,https://localhost,http://tauri.localhost,tauri://localhost').split(','), allow_credentials=False, allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Authorization','Content-Type'])
 
 @app.middleware('http')

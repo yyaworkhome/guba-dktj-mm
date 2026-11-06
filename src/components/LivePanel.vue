@@ -20,7 +20,8 @@ interface LiveData {
   limitations: string[];
 }
 interface LiveStock { id: string; name: string; code: string; exchange: string; }
-const stocks = ref<LiveStock[]>([]), instrumentId = ref('XSHE:300059'), stockQuery = ref('');
+const props = defineProps<{initialInstrument?: string}>();
+const stocks = ref<LiveStock[]>([]), instrumentId = ref(props.initialInstrument || 'XSHE:300059'), stockQuery = ref('');
 const content = ref<'titles' | 'body'>('titles');
 const filteredStocks = computed(() => stocks.value.filter(s => `${s.id} ${s.code} ${s.name}`.toLowerCase().includes(stockQuery.value.trim().toLowerCase())));
 const selectedStock = computed(() => stocks.value.find(s => s.id === instrumentId.value));
@@ -67,7 +68,7 @@ onUnmounted(() => { version++; });
         <div><p class="live-eyebrow"><Database :size="14" />真实采样 · 规则分类</p><h2>{{ selectedStock?.name || data?.name || '东方财富' }} <span class="subtle">{{ instrumentId }} · {{ scopeName }}口径</span></h2></div>
         <button class="secondary compact" :disabled="busy" @click="refresh()"><RefreshCw :size="14" :class="{ spin: busy }" />刷新已采集数据</button>
       </div>
-      <p class="subtle live-description">已开放5只股票，标题与正文分别统计，行情为未复权日线；大盘、板块等入口仍为演示分析。</p>
+      <p class="subtle live-description">已开放5只股票，标题与正文分别统计，行情为未复权日线。大盘、板块栏目可查询妙想真实行情，其综合情绪聚合仍待接入。</p>
       <label class="live-search-label" for="live-stock-search">输入个股代码或名称</label>
       <input id="live-stock-search" v-model="stockQuery" class="live-search" placeholder="如 000001、平安银行、600519" />
       <div class="live-stock-options" role="group" aria-label="选择真实采样股票">

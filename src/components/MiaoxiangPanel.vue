@@ -9,9 +9,9 @@ type Table = { title: string; entity: string; source_type: string; total_rows: n
   columns: {key: string; label: string; date: string}[]; rows: string[][] };
 type Result = Entry & { cached: boolean; source: string; conditions: string; tables?: Table[];
   entities?: {name: string; code: string; type: string}[]; notes?: string[]; truncated?: boolean; error?: string };
-const props = defineProps<{ username: string }>();
+const props = defineProps<{ username: string; context?: 'index' | 'sector' }>();
 const emit = defineEmits<{ login: [] }>();
-const kind = ref<QueryKind>('data'), query = ref('东方财富300059最新价');
+const kind = ref<QueryKind>(props.context === 'sector' ? 'screen' : 'data'), query = ref(props.context === 'sector' ? '半导体行业涨跌幅前10名' : props.context === 'index' ? '上证指数000001.SH最新收盘价' : '东方财富300059最新价');
 const status = ref<{ configured: boolean } | null>(null), history = ref<Entry[]>([]);
 const result = ref<Result | null>(null), error = ref(''), busy = ref(false), exporting = ref(false);
 const failedDraft = ref(false);
@@ -77,8 +77,9 @@ onUnmounted(() => { disposed = true; ++version; });
 <template>
   <div class="mx-panel">
     <section class="panel">
-      <div class="panel-heading"><h2>妙想数据查询</h2><span class="subtle">{{ status ? (status.configured ? '数据服务已配置' : '数据服务未配置') : '检查服务中…' }}</span></div>
+      <div class="panel-heading"><h2>{{context === 'index' ? '大盘指数 · 真实行情查询' : context === 'sector' ? '板块 · 真实条件筛选' : '妙想数据查询'}}</h2><span class="subtle">{{ status ? (status.configured ? '数据服务已配置' : '数据服务未配置') : '检查服务中…' }}</span></div>
       <p class="subtle mx-intro">查询个股、指数行情和板块成分，保留每次获取时间与接口解析条件。</p>
+      <p v-if="context" class="subtle mx-note">此栏目提供真实行情{{context === 'sector'?'与条件筛选':''}}；指数/板块的真实综合情绪聚合尚未接入。可切换“模拟演示”体验情绪分析流程。</p>
       <form @submit.prevent="run">
         <div class="mode-tabs" role="group" aria-label="妙想查询类型">
           <button v-for="(label, key) in names" :key="key" type="button" :class="{selected: kind === key}" :aria-pressed="kind === key" :disabled="busy" @click="kind = key">{{ label }}</button>

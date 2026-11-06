@@ -69,6 +69,18 @@ class AlertRule(Base):
     threshold: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
+class LiveAlertRule(Base):
+    """Real-sample rules are isolated from demonstration alerts."""
+    __tablename__ = 'live_alert_rules'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    instrument_id: Mapped[str] = mapped_column(ForeignKey('instruments.id'))
+    content: Mapped[str] = mapped_column(String(16))
+    days: Mapped[int] = mapped_column(Integer)
+    metric: Mapped[str] = mapped_column(String(32))
+    threshold: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
 class Post(Base):
     __tablename__ = 'posts'
     __table_args__ = (UniqueConstraint('source', 'source_id'),)

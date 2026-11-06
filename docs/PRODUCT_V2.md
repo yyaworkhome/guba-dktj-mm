@@ -52,7 +52,8 @@
 | provider_queries | user_id / kind / query / started_at / observed_at / status / result | 妙想只读规范化结果追加，账号隔离，不注入情绪或回测 |
 | users / auth_sessions | hash / token_hash / expires_at | Argon2密码哈希，随机会话仅存token哈希，退出撤销 |
 | watch_items | user_id / instrument_id | 账号隔离且重复添加幂等 |
-| alert_rules | user_id / instrument_id / metric / threshold | 阈值0–100；当前仅站内查询 |
+| alert_rules | user_id / instrument_id / metric / threshold | 演示预警，阈值0–100；仅站内查询 |
+| live_alert_rules | user_id / instrument_id / content / days / metric / threshold | 真实预警，按样本质量与新鲜度判断；不与演示混用 |
 
 SQLAlchemy模型为数据库草案及开发建表来源，当前无正式迁移工具；`create_all`不能升级已存在的表。生产启用前引入Alembic迁移并通过SQLite/PostgreSQL双数据库验证，不通过删除库升级。
 
@@ -74,7 +75,7 @@ SQLAlchemy模型为数据库草案及开发建表来源，当前无正式迁移�
 
 ## 信号定义与优先级
 
-当前规则包括看多/看空≥80%、前日看空≥60%且当前低于50%、看多单日上升≥5个百分点、看多≥80%且近3日涨幅≤1%、价格跌而看多增。它们是开发阈值，需真实样本标定，不称“AI预测”。
+演示规则包括看多/看空≥80%、前日看空≥60%且当前低于50%、看多单日上升≥5个百分点、看多≥80%且近3日涨幅≤1%、价格跌而看多增。它们是开发阈值，需真实样本标定，不称“AI预测”。真实栏目当前仅提供达到样本/作者/方向数与24小时观察门槛后的方向集中度条件筛选，默认阈值80，支持70/80/90及偏多/偏空；中性不计入舆论分分母，不将方向集中解读为交易机会。真实跨日反转、背离与未来收益验证仍未启用。
 
 重点后续：低位情绪升温需要滚动价格分位；反向指标需要一致性、价格动量衰减与流动性；热门异动需要相对同对象历史的异常讨论量，避免大股吧天然占优；资金分歧必须标注代理来源；板块扩散需同步成分和足够覆盖率。
 

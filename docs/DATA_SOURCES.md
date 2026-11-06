@@ -64,15 +64,26 @@ CLI会创建固定证券目录项，无需生成演示数据。若希望演示�
 | `GET /api/live/analysis?days=3&instrument_id=XSHE:300059&content=body` | 仅所选股票/模式的真实样本；北京时间自然日，允许1～30日；最近5条有效样本带来源和可用时间 |
 | `GET /api/live/timeline?instrument_id=XSHE:300059&content=titles` | 该证券/模式最近30天保存的采集快照，最多200点，保留当时统计窗口与空值 |
 | `GET /api/live/rankings?days=3&content=titles&sort=opinion_score` | 同口径5股样本榜与未达标覆盖原因；sort另支持bullish_pct、bearish_pct、effective_posts |
+| `GET /api/live/alerts`、`POST /api/live/alerts`、`DELETE /api/live/alerts/{id}` | 需登录；真实预警独立保存，按样本门槛与24小时新鲜度判断触发 |
+| `GET /api/live/watchlist?days=3&content=titles`、`PUT /api/live/watchlist` | 需登录；统一自选清单的真实5股对比/新增，不支持对象保留且analysis=null |
+| `DELETE /api/watchlist?instrument_id=...` | 需登录；真实与演示共用同一自选关系，移除只影响当前账号 |
 | 首页“刷新已采集数据” | 查询数据库，不请求东方财富 |
-| `GET /api/analysis`、`GET /api/rankings`、回测、导出、预警 | 仍是隔离的演示功能；不等同于新增的live接口 |
+| `GET /api/analysis`、`GET /api/rankings`、`/api/backtest`、`/api/export`、`/api/alerts` | 隔离的演示功能；真实预警使用live接口，妙想导出使用独立mx接口 |
 
 CLI返回码：所需源成功为0；部分失败、全部失败、限频或锁冲突为1。每源独立保存状态，失败后保留旧观察记录并显示旧数据时间，不用演示、其他股票或标题代替正文。超过24小时无成功帖子观察会标为陈旧。同版本再次获取会更新时间状态，但不会制造内容修订。`collection_runs.details._meta` 记录模式与来源；旧无元数据运行按标题解释。
 
 ## 数据库与恢复
 
-此次只新增 `collection_runs` 和 `quote_observations` 两张表，现有帖子/修订/分类/快照模型没有改列。启动API或CLI的 `create_all` 会创建缺失表。仍未建立通用生产迁移体系；升级前先备份，生产需另行验证PostgreSQL迁移与并发行为。
+采集使用新增的 `collection_runs`、`quote_observations`；妙想使用 `provider_queries`，真实预警另存 `live_alert_rules`。现有帖子/修订/分类/快照模型没有改列。启动API或CLI的 `create_all` 会创建缺失表。仍未建立通用生产迁移体系；升级前先备份，生产需另行验证PostgreSQL迁移与并发行为。
 
 本机通过 `backend/data/collector.lock` 防止同时启动，且数据库检查同一股票最近运行间隔至少10分钟，标题/正文共用限频；详情请求之间至少1秒。进程异常退出可能留下锁或running记录：先检查是否仍有采集进程，确认停止后再移走锁文件重试，不能盲目删锁并发运行，不修改历史时间规避限频。多主机部署需增加数据库级锁；本版未支持多节点采集。
 
 源响应正文与探测文件不入Git。运行表保存响应SHA256、源URL、观察时间、筛除数量；标题修订保存内容摘要和引用链接。账号、数据库、环境文件及采样内容均由gitignore排除。
+
+## 栏目规则与账号功能
+
+真实排行榜、方向集中度筛选和预警共用有效样本≥20、作者≥10、方向样本≥10、最近帖子观察≤24小时的门槛。规则阈值未校准。方向集中度只在看多+看空样本内判断，70/80/90可选；它不判断情绪反转、讨论增速或价格背离。
+
+真实预警按股票、内容模式、自然日窗口、指标、阈值保存；完全相同条件重复提交返回已有规则，每账号最多50条。可选看多占比、看空占比、舆论分，比较方向为大于等于，阈值0～100。每次查询使用同一截止时点；门槛未达标时ready=false、value=null、triggered=false并返回原因，UI展示待积累/待更新，不能解读为已经验证未触发。仅站内手动查询，不运行调度、不发送通知，也不保存虚构触发事件。
+
+自选关系由真实与演示页面共享；真实新增只允许5股白名单。清单内原有指数/板块等对象仍保留，但没有真实情绪分。真实预警、自选添加可在未生成演示目录时创建必要的5股目录项；账号之间查询和删除均隔离。所有live账号统计只读数据库，不访问源站。真实历史回测栏目目前提供已保存快照核查，缺完整交易日历、复权价格与可用时点一致的未来成交价格，尚不返回真实收益或胜率。

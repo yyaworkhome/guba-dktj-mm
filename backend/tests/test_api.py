@@ -91,3 +91,24 @@ def test_backtest_is_honest_and_classifier_requires_auth(client):
     headers=account(client,'researcher')
     result=client.post('/api/classify',headers=headers,json={'text':'看好'}).json()
     assert result['method']=='rules-v1' and result['confidence'] is None
+
+
+def test_each_demo_catalog_object_supports_analysis_backtest_and_export(client):
+    catalog=client.get('/api/instruments').json()
+    assert {'market','index','sector','stock'}=={i['kind'] for i in catalog}
+    for item in catalog:
+        iid=item['id']
+        for period in (1,3,5,10,20):
+            response=client.get('/api/analysis',params={'instrument_id':iid,'period':period})
+            assert response.status_code==200,(iid,response.text)
+            result=response.json()
+            assert result['instrument']['id']==iid and result['data_mode']=='demo'
+            assert len(result['trend'])==period
+        result=client.get('/api/backtest',params={'instrument_id':iid,'threshold':0}).json()
+        assert len(result['results'])==4 and result['data_mode']=='demo'
+        assert client.get('/api/export',params={'instrument_id':iid,'period':3}).status_code==200
+    for sort in ('score','bullish_pct','bearish_pct','heat_change'):
+        result=client.get('/api/rankings',params={'sort':sort}).json()
+        assert len(result)==5 and all(r['data_mode']=='demo' for r in result)
+    assert client.get('/api/signals').status_code==200
+    assert client.get('/api/report').json()['data_mode']=='demo'

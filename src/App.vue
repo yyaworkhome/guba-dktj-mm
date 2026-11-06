@@ -37,6 +37,8 @@ import RankTable from "./components/RankTable.vue";
 import BacktestPanel from "./components/BacktestPanel.vue";
 import LivePanel from "./components/LivePanel.vue";
 import MiaoxiangPanel from "./components/MiaoxiangPanel.vue";
+import LiveAccountPanel from './components/LiveAccountPanel.vue';
+import LiveResearchPanel from './components/LiveResearchPanel.vue';
 type View =
   | "home"
   | "index"
@@ -79,8 +81,14 @@ const view = ref<View>("home"),
   mode = ref<Kind>("market"),
   period = ref(10);
 const homeData = ref<'live' | 'demo' | 'mx'>('live');
-const showLive = computed(() => view.value === 'home' && homeData.value === 'live');
-const showMx = computed(() => view.value === 'home' && homeData.value === 'mx');
+const moduleData = ref<'real'|'demo'>('real');
+const liveInstrument = ref('XSHE:300059');
+const realModule = computed(() => view.value !== 'home' && moduleData.value === 'real');
+const showLive = computed(() => (view.value === 'home' && homeData.value === 'live') || (view.value === 'stock' && realModule.value));
+const showMx = computed(() => (view.value === 'home' && homeData.value === 'mx') || (['index','sector'].includes(view.value) && realModule.value));
+const showDemo = computed(() => !showLive.value && !showMx.value && !realModule.value);
+async function switchModuleData(value:'real'|'demo') { moduleData.value=value; await navigate(view.value); }
+async function openLiveInstrument(id:string) { liveInstrument.value=id; moduleData.value='real'; await navigate('stock'); window.scrollTo({top:0,behavior:'smooth'}); }
 async function switchHomeData(value: 'live' | 'demo' | 'mx') {
   homeData.value = value;
   error.value = '';
@@ -184,7 +192,9 @@ let searchTimer: ReturnType<typeof setTimeout>,
   toastTimer: ReturnType<typeof setTimeout>,
   searchVersion = 0,
   analysisVersion = 0,
-  rankVersion = 0;
+  rankVersion = 0,
+  backtestVersion = 0,
+  navigationVersion = 0;
 function message(s: string) {
   toast.value = s;
   clearTimeout(toastTimer);
@@ -198,6 +208,7 @@ function expire() {
   watches.value = [];
   watchAnalyses.value = [];
   alerts.value = [];
+  classified.value = null;
 }
 function beforeInstall(e: Event) {
   e.preventDefault();
@@ -234,6 +245,8 @@ function searchInput() {
   searchTimer = setTimeout(loadCandidates, 180);
 }
 async function pick(i: Instrument) {
+  moduleData.value='demo';
+  if(i.kind==='market')homeData.value='demo';
   clearTimeout(searchTimer);
   selected.value = i;
   query.value = i.name;
@@ -293,13 +306,18 @@ async function loadRanks() {
   }
 }
 async function navigate(v: View) {
+  const navigation = ++navigationVersion;
+  ++analysisVersion; ++rankVersion; ++searchVersion; ++backtestVersion;
+  busy.value=false; backtestBusy.value=false; pickerOpen.value=false;
+  clearTimeout(searchTimer);
   view.value = v;
   menuOpen.value = false;
   error.value = "";
-  if (showLive.value || showMx.value) return;
+  if (!showDemo.value) return;
   try {
     if (["home", "index", "sector", "stock"].includes(v)) {
       await changeMode(v === "home" ? "market" : (v as Kind));
+      if(navigation!==navigationVersion)return;
       await run();
     }
     if (v === "rankings") await loadRanks();
@@ -318,10 +336,11 @@ async function navigate(v: View) {
       const s = await request<{
         items: (Signal & { instrument: Instrument })[];
       }>("/signals");
-      signalItems.value = s.items;
+      if(navigation===navigationVersion)signalItems.value = s.items;
     }
     if (v === "backtest") {
       if (!selected.value) await changeMode("market");
+      if(navigation!==navigationVersion)return;
       await run();
     }
   } catch (e) {
@@ -329,6 +348,8 @@ async function navigate(v: View) {
   }
 }
 async function openInstrument(i: Instrument) {
+  moduleData.value='demo';
+  if (i.kind === 'market') homeData.value='demo';
   view.value =
     i.kind === "stock"
       ? "stock"
@@ -382,7 +403,7 @@ async function loadPrivate() {
       request<Alert[]>("/alerts"),
     ]);
     const analyses = await Promise.all(
-      w.map((i) =>
+      (showDemo.value && view.value==='portfolio' ? w : []).map((i) =>
         request<Analysis>(
           `/analysis?instrument_id=${encodeURIComponent(i.id)}&period=10`,
         ),
@@ -451,16 +472,19 @@ async function removeAlert(id: number) {
 }
 async function runBacktest() {
   if (!analysis.value) return;
+  const version=++backtestVersion;
+  const id=analysis.value.instrument.id;
   backtestBusy.value = true;
   error.value = "";
   try {
-    backtest.value = await request<Backtest>(
-      `/backtest?${new URLSearchParams({ instrument_id: analysis.value.instrument.id, threshold: String(threshold.value) })}`,
+    const result = await request<Backtest>(
+      `/backtest?${new URLSearchParams({ instrument_id: id, threshold: String(threshold.value) })}`,
     );
+    if(version===backtestVersion)backtest.value=result;
   } catch (e) {
-    fail(e);
+    if(version===backtestVersion)fail(e);
   } finally {
-    backtestBusy.value = false;
+    if(version===backtestVersion)backtestBusy.value = false;
   }
 }
 async function classify() {
@@ -518,7 +542,7 @@ onUnmounted(() => {
       >散户情绪量化<span>RETAIL SENTIMENT LAB</span></a
     >
     <div class="header-right">
-      <span class="data-status"><i></i>{{ showMx ? '妙想数据 · 按需查询' : showLive ? '真实个股采样 · 手动更新' : '演示数据 · 与真实采样隔离' }}</span
+      <span class="data-status"><i></i>{{ showMx ? '妙想数据 · 按需查询' : showLive ? '真实个股采样 · 手动更新' : realModule ? '真实样本 · 有限覆盖' : '演示数据 · 与真实采样隔离' }}</span
       ><button v-if="installPrompt" class="secondary compact" @click="install">
         安装应用</button
       ><button
@@ -558,7 +582,7 @@ onUnmounted(() => {
   <main>
     <div class="page-heading">
       <div>
-        <h1>{{ showMx ? '行情与板块数据' : showLive ? '散户情绪 · 真实数据采样' : title }}</h1>
+        <h1>{{ view==='home' ? (showMx ? '行情与板块数据' : showLive ? '散户情绪 · 真实数据采样' : title) : title }}</h1>
         <p>
           {{
             view === "home"
@@ -569,7 +593,7 @@ onUnmounted(() => {
           }}
         </p>
       </div>
-      <div v-if="!showLive && !showMx" class="heading-actions">
+      <div v-if="showDemo" class="heading-actions">
         <button class="secondary" aria-label="情绪复盘" @click="showReport">
           <FileText :size="16" /><span>情绪复盘</span></button
         ><button class="secondary" aria-label="数据口径" @click="modal = 'method'">
@@ -577,15 +601,18 @@ onUnmounted(() => {
         </button>
       </div>
     </div>
-    <p class="mobile-data-status">{{ showMx ? '妙想数据 · 按需查询与历史留存' : showLive ? '个股真实采样 · 标题/正文分开统计 · 规则分类' : '演示数据 · 与真实采样隔离 · AI尚未接入' }}</p>
+    <p class="mobile-data-status">{{ showMx ? '妙想数据 · 按需查询与历史留存' : showLive ? '个股真实采样 · 标题/正文分开统计 · 规则分类' : realModule ? '真实样本 · 有限覆盖 · 规则分类' : '演示数据 · 与真实采样隔离 · AI尚未接入' }}</p>
     <div v-if="view === 'home'" class="page-filters" role="group" aria-label="数据来源">
       <button :class="['secondary', { selected: homeData === 'live' }]" :aria-pressed="homeData === 'live'" @click="switchHomeData('live')">真实采样 · 个股</button>
       <button :class="['secondary', { selected: homeData === 'mx' }]" :aria-pressed="homeData === 'mx'" @click="switchHomeData('mx')">妙想数据 · 行情与板块</button>
       <button :class="['secondary', { selected: homeData === 'demo' }]" :aria-pressed="homeData === 'demo'" @click="switchHomeData('demo')">全功能演示 · 模拟样本</button>
     </div>
-    <LivePanel v-if="showLive" />
-    <MiaoxiangPanel v-if="showMx" :username="username" @login="modal = 'auth'" />
-    <template v-if="!showLive && !showMx">
+    <div v-if="view!=='home'" class="page-filters" role="group" aria-label="栏目数据来源"><button :class="['secondary',{selected:moduleData==='real'}]" :aria-pressed="moduleData==='real'" @click="switchModuleData('real')">真实数据</button><button :class="['secondary',{selected:moduleData==='demo'}]" :aria-pressed="moduleData==='demo'" @click="switchModuleData('demo')">模拟演示</button></div>
+    <LivePanel v-if="showLive" :initial-instrument="liveInstrument" :key="`live-${view}-${liveInstrument}`" />
+    <MiaoxiangPanel v-if="showMx" :key="view" :context="view==='index'?'index':view==='sector'?'sector':undefined" :username="username" @login="modal = 'auth'" />
+    <LiveAccountPanel v-if="realModule&&(view==='alerts'||view==='portfolio')" :key="view" :view="view" :username="username" @login="modal='auth'" @select="openLiveInstrument" />
+    <LiveResearchPanel v-if="realModule&&(view==='rankings'||view==='signals'||view==='backtest')" :key="view" :view="view" @select="openLiveInstrument" />
+    <template v-if="showDemo">
     <div v-if="error" class="error-banner" role="alert">
       {{ error }}<button class="text-button" @click="error = ''">关闭</button>
     </div>
@@ -931,7 +958,7 @@ onUnmounted(() => {
     >
     </template>
     <footer class="page-footer">
-      <span>{{ showMx ? '查询结果按获取时间留存；请核对证券、数据日期与解析条件。' : showLive ? '限量采样与规则统计，仅用于研究；不代表全体散户观点。' : '当前分析为可重复的模拟样本，不代表实时市场。' }}</span
+      <span>{{ showMx ? '查询结果按获取时间留存；请核对证券、数据日期与解析条件。' : (showLive || realModule) ? '限量采样与规则统计，仅用于研究；不代表全体散户观点。' : '当前分析为可重复的模拟样本，不代表实时市场。' }}</span
       ><span>统一引擎 · 历史留痕</span>
     </footer>
   </main>
@@ -1012,7 +1039,7 @@ onUnmounted(() => {
       ><template v-if="modal === 'method'"
         ><h2>数据口径与接入状态</h2>
         <p>
-          当前为研发版本，所有市场值来自固定的20个模拟交易日；不抓取或冒充实时股吧、行情或资金数据。
+          当前为模拟演示口径：市场值来自固定的20个模拟交易日。真实栏目另行读取股吧限量采样或妙想行情，不混入此处的情绪分、回测与复盘。
         </p>
         <ul>
           <li>
