@@ -33,13 +33,11 @@ def test_missing_dimensions_are_not_renormalized_to_full_score():
 
 
 def test_stale_bad_low_volume_and_corporate_action_prices_withhold_trade_levels():
-    for mutation in ['stale','future_observation','future_bar','illiquid','gap','missing','duplicate','few']:
+    for mutation in ['stale','future_observation','future_bar','gap','missing','duplicate','few']:
         data=sample();quote=data['quote']
         if mutation=='stale':quote['observed_at']=(NOW-timedelta(hours=25)).isoformat()
         elif mutation=='future_observation':quote['observed_at']=(NOW+timedelta(minutes=10)).isoformat()
         elif mutation=='future_bar':quote['bars'][-1]['date']=(NOW+timedelta(days=2)).date().isoformat()
-        elif mutation=='illiquid':
-            for b in quote['bars']:b['amount_cny']=100
         elif mutation=='gap':
             b=quote['bars'][-1];b.update(open=20,close=20,low=19,high=21)
         elif mutation=='missing':del quote['bars'][-1]['high']
@@ -48,6 +46,20 @@ def test_stale_bad_low_volume_and_corporate_action_prices_withhold_trade_levels(
         report=decision_report(data,now=NOW)
         assert report['plan'] is None and report['price_reasons'],mutation
         assert not report['technical'] or not report['technical'].get('conditional_levels'),mutation
+
+
+def test_trade_risk_rejections_do_not_hide_valid_price_analysis():
+    for mutation in ['illiquid','missing_amount','wide_stop']:
+        data=sample()
+        for bar in data['quote']['bars']:
+            if mutation=='illiquid':bar['amount_cny']=100
+            elif mutation=='missing_amount':bar['amount_cny']=None
+            else:bar['low']=bar['close']*.7
+        result=decision_report(data,now=NOW)
+        assert not result['price_reasons'] and result['technical']['trade_reasons'],mutation
+        assert result['data_status']['price']=='技术数据可用'
+        assert result['technical']['regime']=='趋势偏多' and result['plan'] is None
+        assert not result['technical'].get('conditional_levels')
 
 
 def test_weak_sentiment_withholds_entry_even_when_price_levels_are_valid():

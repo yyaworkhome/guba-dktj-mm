@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from .auth import current_user
 from .database import get_db, DATA_DIR
-from .models import CollectionRun
+from .models import CollectionRun,MarketScan
 from .eastmoney import IID, stock, default_client
 from .collect import collect, collector_lock
 from .live import run_dict, live_analysis
@@ -90,9 +90,13 @@ def analyze(body: AnalyzeBody, request: Request, db=Depends(get_db)):
     """
     validate(body.instrument_id)
     info = status(request, body.instrument_id, db)
+    blocked=db.scalar(select(MarketScan).where(MarketScan.active_key=='active',MarketScan.status=='paused'))
+    access_paused=bool(blocked and any(term in blocked.error for term in ('身份核实','验证码','验证或限制')))
     mode, run = 'saved', None
     if not info['enabled']:
         message = '本服务未启用页面采集，仅分析已保存样本。请用标准本机启动脚本开启采集。'
+    elif access_paused:
+        mode,message='source_paused','股吧源站验证尚未解除，未重新请求帖子；显示已保存样本。可点击“更新行情”独立分析价格趋势。'
     elif info['locked']:
         mode, message = 'busy', '另有采集任务正在运行，本次分析已保存样本；任务结束后可再分析。'
     elif info['next_allowed_at']:

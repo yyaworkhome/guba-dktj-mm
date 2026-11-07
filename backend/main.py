@@ -29,6 +29,7 @@ from .live_export import router as live_export_router
 from .market_scan import router as market_scan_router
 from .scanner import worker
 from .decision import router as decision_router
+from .quotes import router as quote_router
 
 @asynccontextmanager
 async def lifespan(app):
@@ -49,6 +50,7 @@ app.include_router(securities_router)
 app.include_router(live_export_router)
 app.include_router(market_scan_router)
 app.include_router(decision_router)
+app.include_router(quote_router)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,https://localhost,http://tauri.localhost,tauri://localhost').split(','), allow_credentials=False, allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Authorization','Content-Type'])
 
 @app.middleware('http')

@@ -4,6 +4,7 @@ import {Download,ExternalLink,RefreshCw} from 'lucide-vue-next';
 import {request,download} from '../api';
 import StockSearch,{type SearchStock} from './StockSearch.vue';
 import LiveHistory from './LiveHistory.vue';
+import QuotePanel from './QuotePanel.vue';
 import type {LiveAnalysis} from '../types';
 const props=defineProps<{initialInstrument?:string;home?:boolean}>();
 const emit=defineEmits<{select:[id:string]}>();
@@ -45,6 +46,7 @@ onMounted(load);onUnmounted(()=>{disposed=true;++version;});
       <div class="summary-numbers"><div><span>有效样本</span><strong>{{data?.effective_posts??'—'}}</strong></div><div v-for="key in ['bullish','bearish','neutral']" :key="key"><span>{{names[key]}}</span><strong :class="key==='bullish'?'bull':key==='bearish'?'bear':''">{{data?.counts[key]??'—'}}</strong></div></div>
       <div class="summary-time"><span>更新时间</span><time>{{time(data?.last_post_observation)}}</time></div>
     </section>
+    <QuotePanel :key="iid" :instrument-id="iid" :disabled="busy" @updated="load"/>
     <slot v-if="home" name="rankings"/>
     <template v-if="data&&!busy">
       <div class="analysis-detail-heading"><h2>多空分析明细</h2><button class="secondary" :disabled="exporting" @click="exportData"><Download :size="15"/>{{exporting?'导出中…':'导出 Excel'}}</button></div>

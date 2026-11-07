@@ -196,3 +196,16 @@ class DecisionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
     version: Mapped[str] = mapped_column(String(40))
     result: Mapped[dict] = mapped_column(JSON)
+
+
+class QuoteFetch(Base):
+    """Independent immutable market observations; never stand in for forum samples."""
+    __tablename__ = 'quote_fetches'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[str] = mapped_column(ForeignKey('instruments.id'),index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)
+    status: Mapped[str] = mapped_column(String(20),default='running')
+    source: Mapped[str] = mapped_column(String(80),default='')
+    bars: Mapped[list] = mapped_column(JSON,default=list)
+    details: Mapped[list] = mapped_column(JSON,default=list)

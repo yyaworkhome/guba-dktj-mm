@@ -13,7 +13,7 @@ from .local_collection import enabled_for
 from .research import utc
 
 router=APIRouter(prefix='/api/live')
-VERSION='decision-rules-v1'
+VERSION='decision-rules-v2'
 WEIGHTS={'sentiment':25,'change':15,'trend':20,'volume':15,'environment':15,'quality':10}
 
 
@@ -28,10 +28,10 @@ def technical_levels(quote, now):
     bars=[b for b in quote['bars'] if b['date']<local.date().isoformat() or (b['date']==local.date().isoformat() and local.hour>=16)]
     if len(bars)<21: return None,[*reasons,'至少需要21根完整日线']
     bars=bars[-30:]
-    required=('open','close','high','low','volume_lots','amount_cny')
+    required=('open','close','high','low','volume_lots')
     if any(any(not isinstance(b.get(k),(int,float)) or not isfinite(b[k]) for k in required) for b in bars):
         return None,[*reasons,'日线价格或成交字段缺失']
-    if any(not 0<b['low']<=min(b['open'],b['close'])<=max(b['open'],b['close'])<=b['high'] or b['volume_lots']<0 or b['amount_cny']<0 for b in bars):
+    if any(not 0<b['low']<=min(b['open'],b['close'])<=max(b['open'],b['close'])<=b['high'] or b['volume_lots']<0 or (b.get('amount_cny') is not None and (not isinstance(b['amount_cny'],(int,float)) or not isfinite(b['amount_cny']) or b['amount_cny']<0)) for b in bars):
         return None,[*reasons,'日线价格或成交字段异常']
     if any(a['date']>=b['date'] for a,b in zip(bars,bars[1:])): return None,[*reasons,'日线日期重复或顺序异常']
     if (local.date()-datetime.fromisoformat(bars[-1]['date']).date()).days>4: reasons.append('最近日线距今超过4自然日；节假日须另行核对交易日历')
@@ -44,16 +44,20 @@ def technical_levels(quote, now):
     entry=round(max(resistance,latest['close'])+.01,2)
     stop=round(support-.5*atr,2)
     risk=entry-stop
-    if stop<=0 or risk<=0 or risk/entry>.2: reasons.append('结构止损距离无效或超过20%的研究阈值')
-    amount=mean(b['amount_cny'] for b in bars[-20:])
-    if amount<20_000_000: reasons.append('近20根日线平均成交额低于2000万元研究门槛')
+    trade_reasons=[]
+    if stop<=0 or risk<=0 or risk/entry>.2: trade_reasons.append('结构止损距离无效或超过20%的研究阈值，不生成交易价位')
+    amount=mean(b['amount_cny'] for b in bars[-20:]) if all(b.get('amount_cny') is not None for b in bars[-20:]) else None
+    if amount is None: trade_reasons.append('行情源未提供历史成交额，流动性尚未核验，不生成交易价位')
+    elif amount<20_000_000: trade_reasons.append('近20根日线平均成交额低于2000万元研究门槛，不生成交易价位')
+    regime='趋势偏多' if latest['close']>mean(b['close'] for b in bars[-5:])>mean(b['close'] for b in bars[-20:]) else '高于20日均线，等待确认' if latest['close']>mean(b['close'] for b in bars[-20:]) else '趋势偏弱'
     value={'date':latest['date'],'close':latest['close'],'observed_at':quote['observed_at'],
            'ma5':round(mean(b['close'] for b in bars[-5:]),3),'ma20':round(mean(b['close'] for b in bars[-20:]),3),
            'atr14':round(atr,3),'support10':round(support,2),'resistance20':round(resistance,2),
-           'volume_ratio':round(latest['volume_lots']/baseline,3) if baseline else None,'average_amount20':round(amount,2),
-           'source':'东方财富未复权日线','bar_count':len(bars)}
+           'volume_ratio':round(latest['volume_lots']/baseline,3) if baseline else None,'average_amount20':round(amount,2) if amount is not None else None,
+           'source':quote.get('source','东方财富未复权日线'),'bar_count':len(bars),'trade_reasons':trade_reasons,
+           'regime':regime if not reasons else '数据待核验','regime_method':'完整日线收盘/MA5/MA20规则；价格趋势不代表股吧情绪'}
     # Trading prices are withheld on stale, discontinuous, illiquid or malformed data.
-    if not reasons:
+    if not reasons and not trade_reasons:
         value['conditional_levels']={'entry':entry,'entry_upper':round(entry+.25*atr,2),'stop':stop,
                                      'target_2r':round(entry+2*risk,2),'target_3r':round(entry+3*risk,2),
                                      'volume_confirmation':1.5,'trailing_stop_distance':round(2*atr,3)}
@@ -88,7 +92,7 @@ def decision_report(data,previous=None,now=None):
     covered=round(sum(c['covered_weight'] for c in components),1)
     complete=covered==100 and all(c['score'] is not None for c in components)
     score=round(sum(c['score']*c['weight']/100 for c in components),1) if complete else None
-    vetoes=[*quality,*price_reasons,'尚未核验停牌、当日涨跌停、除权和可成交状态','缺少完整资金、大盘及板块环境，不启用买入或加仓建议']
+    vetoes=[*quality,*price_reasons,*(technical or {}).get('trade_reasons',[]),'尚未核验停牌、当日涨跌停、除权和可成交状态','缺少完整资金、大盘及板块环境，不启用买入或加仓建议']
     if score is None: vetoes.append(f'六维数据仅覆盖{covered}%权重，不合成为完整100分')
     status='等待信号'
     if technical and not price_reasons and technical['close']<technical['ma20']: status='风险预警'
@@ -108,6 +112,7 @@ def decision_report(data,previous=None,now=None):
             'version':VERSION,'method':'确定性研究规则；AI解释尚未接入；阈值与权重尚未回测校准',
             'score':score,'coverage':covered,'status':status,'risk_level':'数据待核验' if vetoes else '待策略验证',
             'components':components,'vetoes':vetoes,'technical':technical,'price_reasons':price_reasons,'plan':plan,'scenarios':scenarios,
+            'data_status':{'sentiment':'样本待补充' if quality else '样本达标','price':'行情待核验' if price_reasons else '技术数据可用'},
             'evidence':data['examples'],'sample':{'effective_posts':data['effective_posts'],'authors':data['authors'],'counts':data['counts'],'observed_at':data['last_post_observation']},
             'limitations':['技术位仅来自未复权日线，不构成实时委托报价。','止损是风险估算，不保证成交；T+1、跳空、停牌和涨跌停会使实际损失更大。','当前未完成真实策略回测，不输出胜率、预测收益或自动下单。']}
 

@@ -3,7 +3,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from .eastmoney import IID, SOURCE, BODY_SOURCE, CST, STOCKS, stock, list_url
-from .models import Post, PostRevision, Classification, CollectionRun, QuoteObservation, Snapshot, Instrument
+from .models import Post, PostRevision, Classification, CollectionRun, Snapshot, Instrument
 from .research import utc, opinion_score, content_hash
 from .interpretation import interpret_sample
 
@@ -136,8 +136,8 @@ def live_analysis(db, days=1, as_of=None, iid=IID, content='titles'):
         effective.append((p, r, c))
     counts = Counter(c.result['label'] for p, r, c in effective)
     n = len(effective)
-    quote = db.scalar(select(QuoteObservation).where(QuoteObservation.instrument_id == iid,
-        QuoteObservation.observed_at <= cutoff).order_by(QuoteObservation.id.desc()))
+    from .quotes import saved_quote
+    quote_data=saved_quote(db,iid,cutoff)
     last_observation = max((utc(r.observed_at) for p, r in latest.values()), default=None)
     # An unchanged title still counts as a fresh source observation. Its content
     # revision remains untouched; the run records that it was checked again.
@@ -155,7 +155,6 @@ def live_analysis(db, days=1, as_of=None, iid=IID, content='titles'):
         day = utc(p.published_at).astimezone(CST).date().isoformat()
         daily.setdefault(day, Counter())[c.result['label']] += 1
     stale = last_observation is None or cutoff - last_observation > timedelta(hours=24)
-    quote_data = {'observed_at': utc(quote.observed_at).isoformat(), 'bars': quote.bars} if quote else None
     author_count = len({p.author_hash for p, r, c in effective})
     return {'data_mode': 'live', 'instrument_id': iid, 'code': code, 'name': name, 'source': source,
         'content': content, 'source_url': list_url(iid),

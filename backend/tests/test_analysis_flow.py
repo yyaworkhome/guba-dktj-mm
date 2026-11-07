@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from fastapi.testclient import TestClient
 from backend.main import app
+from backend.database import get_db
+from backend.models import MarketScan,UniverseSync
 from backend import local_collection
 from backend.collect import collector_lock
 from backend.interpretation import interpret_sample
@@ -85,6 +87,25 @@ def test_source_rejection_is_visible_and_never_creates_demo_results(client, monk
         assert '403' in data['collection']['run']['details']['posts']['error']
         assert data['analysis']['effective_posts'] == 0 and data['analysis']['opinion_score'] is None
         assert c.get('/api/live/timeline').json()['points'] == []
+
+
+def test_source_verification_pause_reads_saved_analysis_without_opening_network(client, monkeypatch):
+    monkeypatch.setenv('ALLOW_LOCAL_COLLECTION', 'true')
+    def forbidden(): raise AssertionError('paused source must not be requested')
+    monkeypatch.setattr(local_collection, 'default_client', forbidden)
+    with next(app.dependency_overrides[get_db]()) as db:
+        universe=UniverseSync(status='success',total=1,members=['XSHE:300059'])
+        db.add(universe);db.flush()
+        db.add(MarketScan(universe_id=universe.id,active_key='active',status='paused',total=1,
+                          error='源站要求身份核实或验证码，已暂停'))
+        db.commit()
+    with TestClient(app,base_url='http://127.0.0.1',client=('127.0.0.1',1234)) as local:
+        result=local.post('/api/live/analyze',json={'instrument_id':'XSHE:300059'}).json()
+        assert result['collection']['mode']=='source_paused'
+        assert '更新行情' in result['collection']['message']
+        assert result['collection']['run'] is None
+        assert result['analysis']['effective_posts']==0 and result['analysis']['opinion_score'] is None
+        assert local.get('/api/live/status').json()['latest_run'] is None
 
 
 def test_interpretation_distinguishes_unrecognized_limited_and_observed_samples():
