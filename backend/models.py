@@ -209,3 +209,50 @@ class QuoteFetch(Base):
     source: Mapped[str] = mapped_column(String(80),default='')
     bars: Mapped[list] = mapped_column(JSON,default=list)
     details: Mapped[list] = mapped_column(JSON,default=list)
+
+
+class CommunityProbe(Base):
+    """Source validation observations; never substitute activity time for publication."""
+    __tablename__ = 'community_probes'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(24),index=True)
+    instrument_id: Mapped[str] = mapped_column(ForeignKey('instruments.id'),index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)
+    status: Mapped[str] = mapped_column(String(24),default='running')
+    http_status: Mapped[int | None] = mapped_column(Integer,nullable=True)
+    details: Mapped[dict] = mapped_column(JSON,default=dict)
+    samples: Mapped[list] = mapped_column(JSON,default=list)
+
+
+class CommunityAnalysis(Base):
+    __tablename__ = 'community_analyses'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    probe_id: Mapped[int] = mapped_column(ForeignKey('community_probes.id'),index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
+    model: Mapped[str] = mapped_column(String(100))
+    prompt_version: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(24))
+    result: Mapped[dict] = mapped_column(JSON,default=dict)
+
+
+class ScanMethod(Base):
+    """One immutable method per new scan; legacy scans remain Eastmoney rules."""
+    __tablename__ = 'scan_methods'
+    scan_id: Mapped[int] = mapped_column(ForeignKey('market_scans.id'),primary_key=True)
+    config: Mapped[dict] = mapped_column(JSON)
+
+
+class CommunitySchedule(Base):
+    __tablename__ = 'community_schedule'
+    id: Mapped[int] = mapped_column(primary_key=True,default=1)
+    config: Mapped[dict] = mapped_column(JSON)
+
+
+class MarketReport(Base):
+    """Append-only completion/budget-pause reports; partial coverage stays visible."""
+    __tablename__ = 'market_reports'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey('market_scans.id'),index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
+    result: Mapped[dict] = mapped_column(JSON)

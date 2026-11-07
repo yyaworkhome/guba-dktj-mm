@@ -16,7 +16,7 @@ const light=ref(localStorage.getItem('sentiment-theme')==='light');
 watch(light,value=>{document.documentElement.dataset.theme=value?'light':'dark';localStorage.setItem('sentiment-theme',value?'light':'dark');},{immediate:true});
 const requested=new URLSearchParams(location.search).get('stock')||sessionStorage.getItem('sentiment-live-instrument')||'XSHE:300059';
 const iid=ref(/^(XSHE|XSHG|XBSE):\d{6}$/.test(requested)?requested:'XSHE:300059');
-watch(iid,id=>sessionStorage.setItem('sentiment-live-instrument',id));
+watch(iid,id=>{sessionStorage.setItem('sentiment-live-instrument',id);const url=new URL(location.href);url.searchParams.set('stock',id);history.replaceState(null,'',url);});
 function openStock(id:string){iid.value=id;view.value='stock';}
 const username=ref(sessionStorage.getItem('sentiment-user')||'');
 const auth=ref(false),authMode=ref('login'),authName=ref(''),password=ref(''),authBusy=ref(false),authError=ref('');
@@ -48,7 +48,7 @@ onUnmounted(()=>window.removeEventListener('session-expired',expire));
       <MiaoxiangPanel :key="view" :context="view" :username="username" @login="auth=true"/>
     </template>
     <LiveResearchPanel v-else view="backtest" :initial-instrument="iid" @select="openStock"/>
-    <footer class="workspace-footer"><span>规则统计 · 来源可追溯</span><span>东方财富公开样本 · 时间统一为北京时间</span></footer>
+    <footer class="workspace-footer"><span>情绪研究 · 来源可追溯</span><span>公开社区与行情数据 · 时间统一为北京时间</span></footer>
   </main>
   <div v-if="auth" class="account-overlay" @click.self="auth=false" @keydown.esc="auth=false">
     <section class="account-dialog panel" role="dialog" aria-modal="true" aria-labelledby="auth-title" @keydown="trap">

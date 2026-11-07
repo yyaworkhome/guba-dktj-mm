@@ -10,7 +10,7 @@ from .auth import current_user
 from .database import get_db, DATA_DIR
 from .models import CollectionRun,MarketScan
 from .eastmoney import IID, stock, default_client
-from .collect import collect, collector_lock
+from .collect import collect, collector_lock,collector_busy
 from .live import run_dict, live_analysis
 from .research import utc
 
@@ -49,7 +49,7 @@ def status(request: Request, instrument_id: str = Query(IID, max_length=64), db=
                        .order_by(CollectionRun.id.desc()))
     next_at = utc(latest.started_at) + timedelta(minutes=10) if latest else None
     now = datetime.now(timezone.utc)
-    return {'enabled': enabled_for(request), 'locked': (DATA_DIR/'collector.lock').exists(),
+    return {'enabled': enabled_for(request), 'locked': collector_busy(),
             'instrument_id': instrument_id, 'latest_run': run_dict(latest),
             'next_allowed_at': next_at.isoformat() if next_at and next_at > now else None,
             'minimum_interval_seconds': 600}

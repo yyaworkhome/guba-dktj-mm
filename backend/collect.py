@@ -18,18 +18,37 @@ import httpx
 
 
 @contextmanager
-def collector_lock():
-    """CLI and local web requests share the same exclusive local lock."""
+def collector_lock(wait_seconds=0):
+    """OS lock releases on a crash; the marker is only a UI indicator."""
     lock = DATA_DIR / 'collector.lock'
+    handle=(DATA_DIR/'collector.guard').open('a+b')
+    until=time.monotonic()+wait_seconds
+    while True:
+        try:
+            handle.seek(0);handle.write(b'0');handle.flush();handle.seek(0)
+            if sys.platform=='win32':
+                import msvcrt
+                msvcrt.locking(handle.fileno(),msvcrt.LK_NBLCK,1)
+            else:
+                import fcntl
+                fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            break
+        except OSError as exc:
+            if time.monotonic()<until:time.sleep(.1);continue
+            handle.close()
+            raise ValueError('数据采集正在运行，请稍后再试；扫描与手动查询共用采样间隔。') from exc
     try:
-        handle = lock.open('x')
-    except FileExistsError as exc:
-        raise ValueError('已有采集正在运行或存在遗留锁，请先检查采集状态。') from exc
-    try:
-        with handle:
-            yield
+        lock.write_text('collecting',encoding='ascii')
+        yield
     finally:
         lock.unlink(missing_ok=True)
+        handle.close()
+
+
+def collector_busy():
+    try:
+        with collector_lock():return False
+    except ValueError:return True
 
 def collect_bodies(client, candidates, iid, limit):
     chosen = sorted(candidates, key=lambda p: (p['published_at'], int(p['source_id'])), reverse=True)[:limit]

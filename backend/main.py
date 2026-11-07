@@ -30,6 +30,7 @@ from .market_scan import router as market_scan_router
 from .scanner import worker
 from .decision import router as decision_router
 from .quotes import router as quote_router
+from .community import router as community_router
 
 @asynccontextmanager
 async def lifespan(app):
@@ -51,6 +52,7 @@ app.include_router(live_export_router)
 app.include_router(market_scan_router)
 app.include_router(decision_router)
 app.include_router(quote_router)
+app.include_router(community_router)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,https://localhost,http://tauri.localhost,tauri://localhost').split(','), allow_credentials=False, allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Authorization','Content-Type'])
 
 @app.middleware('http')
@@ -101,7 +103,7 @@ def analyze(db, iid, period):
         'limitations':['资金活跃度未接入，缺失维度不以50分填充，按可用权重重算。','热度是独立观察指标；综合分中的热度方向校准仍属模拟。','股吧样本不代表全体散户；板块样本不是完整行业成分。']}
 
 @app.get('/api/health')
-def health(): return {'status':'ok','version':'2.0.0','analysis_workflow':'collect-analyze-v1','mode':'demo+live-sample','ai':'rules-only','live_source':True,'live_scope':'verified Shanghai/Shenzhen/Beijing A-shares; separate title/body samples; on-demand manual collection'}
+def health(): return {'status':'ok','version':'2.0.0','analysis_workflow':'collect-analyze-v1','mode':'demo+live-sample','ai':'deepseek-configurable+explicit-rules','live_source':True,'live_scope':'verified Shanghai/Shenzhen/Beijing A-shares; separate title/body samples; on-demand manual collection'}
 
 def validate_live(iid):
     try: stock(iid)
