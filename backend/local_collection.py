@@ -11,10 +11,10 @@ from .database import get_db, DATA_DIR
 from .models import CollectionRun
 from .eastmoney import IID, stock, default_client
 from .collect import collect, collector_lock
-from .live import run_dict
+from .live import run_dict, live_analysis
 from .research import utc
 
-router = APIRouter(prefix='/api/live/collection')
+router = APIRouter(prefix='/api/live')
 LOCAL_NAMES = {'127.0.0.1', 'localhost', '::1'}
 
 
@@ -42,7 +42,7 @@ def validate(iid):
     except ValueError as exc: raise HTTPException(422, str(exc))
 
 
-@router.get('')
+@router.get('/collection')
 def status(request: Request, instrument_id: str = Query(IID, max_length=64), db=Depends(get_db)):
     validate(instrument_id)
     latest = db.scalar(select(CollectionRun).where(CollectionRun.instrument_id == instrument_id)
@@ -61,7 +61,7 @@ class Body(BaseModel):
     limit: int = Field(default=3, ge=1, le=5)
 
 
-@router.post('')
+@router.post('/collection')
 def start(body: Body, request: Request, user=Depends(current_user), db=Depends(get_db)):
     if not enabled_for(request):
         raise HTTPException(403, '页面采集仅对显式启用的本机服务开放；远程部署请使用服务端采集任务。')
@@ -74,3 +74,41 @@ def start(body: Body, request: Request, user=Depends(current_user), db=Depends(g
     except Exception:
         # Do not leak source responses, database paths or internal details.
         raise HTTPException(500, '采集内部处理失败；请刷新采集状态，不要连续重试。')
+
+
+class AnalyzeBody(Body):
+    days: int = Field(default=3, ge=1, le=30)
+
+
+@router.post('/analyze')
+def analyze(body: AnalyzeBody, request: Request, db=Depends(get_db)):
+    """Local public-data analysis needs no account; private/account APIs retain auth.
+
+    Source access still requires explicit opt-in, loopback host/client/origin,
+    the shared collector lock, verified security identity and 10-minute cooldown.
+    Other deployments can only analyze their previously saved observations.
+    """
+    validate(body.instrument_id)
+    info = status(request, body.instrument_id, db)
+    mode, run = 'saved', None
+    if not info['enabled']:
+        message = '本服务未启用页面采集，仅分析已保存样本。请用标准本机启动脚本开启采集。'
+    elif info['locked']:
+        mode, message = 'busy', '另有采集任务正在运行，本次分析已保存样本；任务结束后可再分析。'
+    elif info['next_allowed_at']:
+        mode, message = 'cooldown', '十分钟采样间隔内，复用已保存的同股票、同口径样本，未重复请求源站。'
+    else:
+        try:
+            with collector_lock(), default_client() as client:
+                run = collect(db, client, body.instrument_id, body.content, body.limit)
+            mode = 'collected'
+            message = {'success': '采集完成，已分析本次保存的真实样本。',
+                       'partial': '本次采集部分成功，请核对股吧与行情各自的状态和时间。',
+                       'failed': '本次采集失败，下方仅分析此前已保存的样本。'}[run['status']]
+        except ValueError as exc:
+            # A concurrent request may have acquired the lock/cooldown meanwhile.
+            mode, message = 'unavailable', str(exc)
+        except Exception:
+            raise HTTPException(500, '采集处理失败，请刷新采集状态后重试。')
+    data = live_analysis(db, days=body.days, iid=body.instrument_id, content=body.content)
+    return {'analysis': data, 'collection': {'mode': mode, 'message': message, 'run': run}}

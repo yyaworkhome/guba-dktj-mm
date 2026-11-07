@@ -59,7 +59,9 @@
 
 CLI会核验并创建新证券目录项，无需生成演示数据；初始5股仍可直接创建。若希望演示并存，可在API启动时设置 `SEED_DEMO=true`；真实查询始终不读取演示快照。
 
-页面采集需登录本系统，并显式启用后端 `ALLOW_LOCAL_COLLECTION=true`。只接受回环客户端、本机主机名，以及存在Origin时的本机http(s)来源。标准 `scripts/dev.ps1` 仅为API子进程启用，并以 `--no-proxy-headers` 启动；不把转发头当本机身份。远程/代理生产部署保持关闭，使用服务端CLI任务。每次页面正文最多请求3条详情；完成后返回真实成功/部分成功/失败及源错误，不把HTTP200解释为全成功。请求超时可能仍在服务端运行，应先刷新状态，不能反复提交。
+首页“开始真实分析”使用 `POST /api/live/analyze`，提交证券、自然日窗口和标题/正文口径。本机公开数据分析无需账号；只有显式启用后端 `ALLOW_LOCAL_COLLECTION=true`、回环客户端、本机主机名，以及存在Origin时的本机http(s)来源，才允许访问源站。标准 `scripts/dev.ps1` 仅为API子进程启用，并以 `--no-proxy-headers` 启动；不把转发头当本机身份。冷却内复用已有同口径样本；禁用或有并发任务时仅分析已保存数据并说明原因。远程/代理生产部署保持关闭，使用服务端CLI任务。原有 `POST /api/live/collection` 继续要求账号。
+
+首页正文每批最多请求5条详情。完成后返回真实成功/部分成功/失败及源错误，不把HTTP200解释为全成功。请求超时可能仍在服务端运行，应先刷新状态，不能反复提交。结果的 `interpretation` 只描述样本：显示有效数量、作者、方向识别率和不足原因，区分空样本/未识别方向/有限方向样本/达开发门槛的观察；价格变化只比较最近两根已保存日线，不用于推断背离、收益或未来走势。直接分析与后续查询使用相同的解释函数，历史快照原值不回写。
 
 | 入口 | 行为 |
 | --- | --- |
@@ -67,6 +69,7 @@ CLI会核验并创建新证券目录项，无需生成演示数据；初始5股�
 | `GET /api/live/instruments?q=000001` | 初始5股与已保存核验股票，不发远程请求 |
 | `GET /api/live/collection?instrument_id=XSHE:002594` | 页面采集开关、共享锁、该股最近运行和下次允许时间 |
 | `POST /api/live/collection` | 需登录且本机启用；提交instrument_id、content、limit；共用锁和10分钟间隔 |
+| `POST /api/live/analyze` | 提交instrument_id、content、days、limit；返回analysis和collection；符合本机开关/来源条件才采集，其余返回已有数据与原因；无需账号、不访问私有账号信息 |
 | `GET /api/live/status?instrument_id=XSHE:300059&content=titles` | 该股票/内容模式的最近采集运行、每源状态、响应摘要、筛除及采样数量 |
 | `GET /api/live/analysis?days=3&instrument_id=XSHE:300059&content=body` | 仅所选股票/模式的真实样本；北京时间自然日，允许1～30日；最近5条有效样本带来源和可用时间 |
 | `GET /api/live/timeline?instrument_id=XSHE:300059&content=titles` | 该证券/模式最近30天保存的采集快照，最多200点，保留当时统计窗口与空值 |
@@ -75,7 +78,7 @@ CLI会核验并创建新证券目录项，无需生成演示数据；初始5股�
 | `GET /api/live/alerts`、`POST /api/live/alerts`、`DELETE /api/live/alerts/{id}` | 需登录；真实预警独立保存，按样本门槛与24小时新鲜度判断触发 |
 | `GET /api/live/watchlist?days=3&content=titles`、`PUT /api/live/watchlist` | 需登录；统一自选清单的已核验A股对比/新增，不支持对象保留且analysis=null |
 | `DELETE /api/watchlist?instrument_id=...` | 需登录；真实与演示共用同一自选关系，移除只影响当前账号 |
-| 首页“刷新已采集数据” | 查询数据库，不请求东方财富 |
+| 首页“读取已保存结果” | 查询数据库，不请求东方财富；需更新源站样本时使用“开始真实分析” |
 | `GET /api/analysis`、`GET /api/rankings`、`/api/backtest`、`/api/export`、`/api/alerts` | 隔离的演示功能；真实预警使用live接口，妙想导出使用独立mx接口 |
 
 CLI返回码：所需源成功为0；部分失败、全部失败、限频或锁冲突为1。每源独立保存状态，失败后保留旧观察记录并显示旧数据时间，不用演示、其他股票或标题代替正文。超过24小时无成功帖子观察会标为陈旧。同版本再次获取会更新时间状态，但不会制造内容修订。`collection_runs.details._meta` 记录模式与来源；旧无元数据运行按标题解释。

@@ -6,21 +6,8 @@ import LiveHistory from './LiveHistory.vue';
 import LiveRankings from './LiveRankings.vue';
 import StockSearch, {type SearchStock} from './StockSearch.vue';
 import CollectionControl from './CollectionControl.vue';
+import type { LiveAnalysis } from '../types';
 
-interface LiveData {
-  instrument_id: string; name: string; code: string; content: string; source_url: string; collector_command: string;
-  examples: { source_id: string; excerpt: string; url: string; label: string; published_at: string; first_seen_at: string; observed_at: string }[];
-  as_of: string; last_post_observation: string | null; stale: boolean; days: number; range: string[];
-  sampled_posts: number; effective_posts: number; authors: number; opinion_score: number | null; coverage: number;
-  counts: Record<string, number>; percentages: Record<string, number | null>;
-  comments: number; reads: number; removed: Record<string, number>;
-  keywords: { text: string; count: number }[];
-  trend: { date: string; posts: number; opinion_score: number | null }[];
-  quote: { observed_at: string; bars: { date: string; open: number; close: number; is_current_session: boolean }[] } | null;
-  status: { latest_run: { id: number; status: string; finished_at: string | null;
-    details: Record<string, { status?: string; error?: string; accepted?: number; received?: number; requested?: number; detail_excluded?: unknown[] }> } | null };
-  limitations: string[];
-}
 interface LiveStock { id: string; name: string; code: string; exchange: string; }
 const props = defineProps<{initialInstrument?: string;username:string}>();
 const emit=defineEmits<{login:[];select:[id:string]}>();
@@ -29,7 +16,7 @@ const content = ref<'titles' | 'body'>('titles');
 const filteredStocks = computed(() => stocks.value.filter(s => `${s.id} ${s.code} ${s.name}`.toLowerCase().includes(stockQuery.value.trim().toLowerCase())));
 const selectedStock = computed(() => stocks.value.find(s => s.id === instrumentId.value));
 const scopeName = computed(() => content.value === 'body' ? '正文' : '标题');
-const data = ref<LiveData | null>(null), days = ref(3), busy = ref(false), error = ref('');
+const data = ref<LiveAnalysis | null>(null), days = ref(3), busy = ref(false), error = ref(''), analyzing = ref(false);
 const exporting=ref(false);
 const directionCount=computed(()=>data.value?data.value.counts.bullish+data.value.counts.bearish:0);
 const directionCoverage=computed(()=>data.value?.effective_posts?Math.round(directionCount.value/data.value.effective_posts*1000)/10:0);
@@ -40,6 +27,10 @@ const lastBar = computed(() => data.value?.quote?.bars.at(-1));
 const historyPanel = ref<InstanceType<typeof LiveHistory> | null>(null);
 const rankingPanel = ref<InstanceType<typeof LiveRankings> | null>(null);
 async function refresh() { await Promise.all([load(), historyPanel.value?.load(), rankingPanel.value?.load()]); }
+async function analyzed(result: LiveAnalysis) {
+  ++version; busy.value = false; error.value = ''; data.value = result;
+  await Promise.all([historyPanel.value?.load(), rankingPanel.value?.load()]);
+}
 async function exportReal(){const current=data.value;if(!current)return;exporting.value=true;try{await download(`/live/export?${new URLSearchParams({instrument_id:current.instrument_id,days:String(current.days),content:current.content})}`,`真实采样-${current.code}-${current.content}.xlsx`);}catch(e){error.value=e instanceof Error?e.message:'导出失败';}finally{exporting.value=false;}}
 async function selectRanked(id: string) { instrumentId.value = id;emit('select',id); stockQuery.value = ''; await load(); }
 function time(s: string | null | undefined) {
@@ -52,7 +43,7 @@ async function load(n = days.value) {
   data.value = null;
   try {
     const params = new URLSearchParams({days: String(n), instrument_id: instrumentId.value, content: content.value});
-    const result = await request<LiveData>(`/live/analysis?${params}`);
+    const result = await request<LiveAnalysis>(`/live/analysis?${params}`);
     if (id === version) data.value = result;
   } catch (e) {
     if (id === version) error.value = e instanceof Error ? e.message : '读取失败';
@@ -74,29 +65,40 @@ onUnmounted(() => { version++; });
     <section class="panel live-intro">
       <div class="panel-heading">
         <div><p class="live-eyebrow"><Database :size="14" />真实采样 · 规则分类</p><h2>{{ selectedStock?.name || data?.name || '东方财富' }} <span class="subtle">{{ instrumentId }} · {{ scopeName }}口径</span></h2></div>
-        <button class="secondary compact" :disabled="busy" @click="refresh()"><RefreshCw :size="14" :class="{ spin: busy }" />刷新已采集数据</button>
+        <button class="secondary compact" :disabled="busy||analyzing" @click="refresh()"><RefreshCw :size="14" :class="{ spin: busy }" />读取已保存结果</button>
       </div>
-      <p class="subtle live-description">支持按代码、名称或拼音查询沪深北A股，核验证券后采集其自身股吧。标题与正文分别统计，行情为未复权日线；没有样本时可在下方发起采集。</p>
-      <StockSearch @select="searchedStock" />
+      <p class="subtle live-description">① 搜索并选择股票　② 点击“开始真实分析”　③ 查看多空比例、样本解读与来源。标题与正文分别分析，行情为未复权日线。</p>
+      <StockSearch :disabled="analyzing" @select="searchedStock" />
+      <details class="saved-stock-picker"><summary>快速选择已保存股票（{{stocks.length}}只）</summary>
       <label class="live-search-label" for="live-stock-search">筛选已保存证券</label>
       <input id="live-stock-search" v-model="stockQuery" class="live-search" placeholder="如 000001、平安银行、600519" />
       <div class="live-stock-options" role="group" aria-label="选择真实采样股票">
-        <button v-for="s in filteredStocks" :key="s.id" :class="['secondary', { selected: instrumentId === s.id }]" :aria-pressed="instrumentId === s.id" @click="chooseStock(s)">{{ s.name }} <small>{{ s.code }} · {{ s.exchange === 'XSHG' ? '上交所' : s.exchange==='XBSE'?'北交所':'深交所' }}</small></button>
+        <button v-for="s in filteredStocks" :key="s.id" :disabled="analyzing" :class="['secondary', { selected: instrumentId === s.id }]" :aria-pressed="instrumentId === s.id" @click="chooseStock(s)">{{ s.name }} <small>{{ s.code }} · {{ s.exchange === 'XSHG' ? '上交所' : s.exchange==='XBSE'?'北交所':'深交所' }}</small></button>
       </div>
       <p v-if="!filteredStocks.length && stocks.length" class="subtle">本机尚未保存该证券，请使用上方全A股搜索。个股000001对应平安银行，上证指数使用大盘栏目。</p>
+      </details>
       <div class="period-options live-periods" role="group" aria-label="内容口径">
-        <button :class="{selected: content === 'titles'}" :aria-pressed="content === 'titles'" @click="chooseContent('titles')">标题采样</button>
-        <button :class="{selected: content === 'body'}" :aria-pressed="content === 'body'" @click="chooseContent('body')">正文采样 · 每批最多5条</button>
+        <button :disabled="analyzing" :class="{selected: content === 'titles'}" :aria-pressed="content === 'titles'" @click="chooseContent('titles')">标题采样</button>
+        <button :disabled="analyzing" :class="{selected: content === 'body'}" :aria-pressed="content === 'body'" @click="chooseContent('body')">正文采样 · 每批最多5条</button>
       </div>
       <div class="period-options live-periods" role="group" aria-label="真实样本自然日范围">
-        <button v-for="n in [1, 3, 5, 10, 20]" :key="n" :class="{ selected: days === n }" :aria-pressed="days === n" @click="load(n)">{{ n === 1 ? '今日' : `近${n}自然日` }}</button>
+        <button v-for="n in [1, 3, 5, 10, 20]" :key="n" :disabled="analyzing" :class="{ selected: days === n }" :aria-pressed="days === n" @click="load(n)">{{ n === 1 ? '今日' : `近${n}自然日` }}</button>
       </div>
-      <CollectionControl :key="`${instrumentId}-${content}`" :instrument-id="instrumentId" :name="selectedStock?.name||data?.name||instrumentId" :content="content" :username="username" @login="emit('login')" @collected="refresh" />
+      <CollectionControl :key="`${instrumentId}-${content}`" :instrument-id="instrumentId" :name="selectedStock?.name||data?.name||instrumentId" :content="content" :days="days" @running="analyzing=$event" @analyzed="analyzed" />
     </section>
     <p v-if="busy" class="panel loading-state" role="status">正在读取真实采样记录…</p>
     <p v-if="error" class="error-banner" role="alert">{{ error }} · 未使用演示数据替代。</p>
-    <template v-if="data">
-      <section class="panel live-summary"><div class="panel-heading"><h2>真实样本解读 · 规则统计</h2><button class="secondary" :disabled="exporting" @click="exportReal">{{exporting?'导出中…':'导出真实 Excel'}}</button></div><p>近{{data.days}}自然日已保存{{data.effective_posts}}条有效{{scopeName}}、{{data.authors}}位作者；明确方向{{directionCount}}条，占有效样本{{directionCoverage}}%。</p><p v-if="!directionCount">当前规则尚未识别出明确方向，无法给出有效舆论分。可查看源帖或补充正文采样；“未识别”不表示这些作者都持中立观点。</p><p v-else>方向样本中，看多{{data.counts.bullish}}条、看空{{data.counts.bearish}}条；舆论分{{data.opinion_score}}仅反映这部分已识别样本。方向覆盖低或样本不足时，不宜解读为整个股吧的一致预期。</p><p class="subtle">导出包含当前统计、最近5条有效样本来源、日线及已保存快照；真实数据留空值，不生成预测收益。</p></section>
+    <p v-if="analyzing" class="panel loading-state" role="status">正在采集并分析 {{selectedStock?.name||instrumentId}}，完成后将在这里显示本次结果。</p>
+    <template v-if="data && !analyzing">
+      <section v-if="data.interpretation" class="panel live-verdict" aria-label="真实分析结论" aria-live="polite">
+        <div class="panel-heading"><h2>{{data.interpretation.headline}}</h2><button class="secondary" :disabled="exporting" @click="exportReal">{{exporting?'导出中…':'导出真实 Excel'}}</button></div>
+        <p class="live-badge">{{data.name}} · {{scopeName}} · 近{{data.days}}自然日</p>
+        <ul><li v-for="line in data.interpretation.bullets" :key="line">{{line}}</li></ul>
+        <p v-if="data.interpretation.price_observation" class="subtle">保存日线 {{data.interpretation.price_observation.from_date}} → {{data.interpretation.price_observation.to_date}}：收盘变化 {{data.interpretation.price_observation.change_pct>0?'+':''}}{{data.interpretation.price_observation.change_pct}}%。这是已保存行情的描述，尚不构成情绪与价格背离信号。</p>
+        <p v-if="data.interpretation.quality_reasons.length" class="live-warning">样本限制：{{data.interpretation.quality_reasons.join('；')}}。</p>
+        <p class="subtle">观察时间 {{time(data.last_post_observation)}}（北京时间） · {{data.interpretation.method}}</p>
+      </section>
+      <section v-if="!data.interpretation" class="panel live-summary"><div class="panel-heading"><h2>真实样本解读 · 规则统计</h2><button class="secondary" :disabled="exporting" @click="exportReal">{{exporting?'导出中…':'导出真实 Excel'}}</button></div><p>近{{data.days}}自然日已保存{{data.effective_posts}}条有效{{scopeName}}、{{data.authors}}位作者；明确方向{{directionCount}}条，占有效样本{{directionCoverage}}%。</p><p v-if="!directionCount">当前规则尚未识别出明确方向，无法给出有效舆论分。可查看源帖或补充正文采样；“未识别”不表示这些作者都持中立观点。</p><p v-else>方向样本中，看多{{data.counts.bullish}}条、看空{{data.counts.bearish}}条；舆论分{{data.opinion_score}}仅反映这部分已识别样本。方向覆盖低或样本不足时，不宜解读为整个股吧的一致预期。</p><p class="subtle">导出包含当前统计、最近5条有效样本来源、日线及已保存快照；真实数据留空值，不生成预测收益。</p></section>
       <section class="panel live-source">
         <div class="panel-heading"><h2>采集状态</h2><span class="live-badge">{{ data.status.latest_run ? statusNames[data.status.latest_run.status] : '尚无采集记录' }}</span></div>
         <p class="subtle">最近运行：{{ time(data.status.latest_run?.finished_at) }}（北京时间） · {{ scopeName }}最近观察：{{ time(data.last_post_observation) }}</p>
@@ -126,12 +128,14 @@ onUnmounted(() => { version++; });
       <details class="panel live-method"><summary>查看采样与统计口径</summary><ul><li v-for="note in data.limitations" :key="note">{{ note }}</li></ul><p class="subtle">内容去重移除 {{ data.removed.duplicate_content || 0 }} 条；作者上限移除 {{ data.removed.author_cap || 0 }} 条。每位作者每天最多计3条，互动量不参与方向加权。</p></details>
     </template>
     <LiveHistory ref="historyPanel" :instrument-id="instrumentId" :content="content" />
-    <LiveRankings ref="rankingPanel" :days="days" :content="content" @select="selectRanked" />
+    <LiveRankings v-if="!analyzing" ref="rankingPanel" :days="days" :content="content" @select="selectRanked" />
   </div>
 </template>
 
 <style scoped>
 .live-search-label { display: block; font-size: 12px; color: var(--muted); margin: 16px 0 7px; }
+.saved-stock-picker{margin:16px 0;color:var(--muted);font-size:12px}.saved-stock-picker summary{cursor:pointer}
+.live-verdict{border-color:var(--accent)}.live-verdict .panel-heading{flex-wrap:wrap;gap:12px}.live-verdict ul{padding-left:18px;font-size:13px;line-height:2;margin:14px 0}.live-verdict p{font-size:12px;line-height:1.9;margin-top:10px}
 .live-summary p{margin-top:12px;line-height:1.9;font-size:13px}.live-summary .panel-heading{flex-wrap:wrap;gap:12px}
 .live-search { width: 100%; max-width: 430px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 11px; color: var(--text); }
 .live-stock-options { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }

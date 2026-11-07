@@ -65,7 +65,7 @@ const nav = [
   ["sector", "板块", LayoutGrid],
   ["stock", "个股", ChartLine],
   ["rankings", "排行榜", Trophy],
-  ["signals", "AI选股", ScanLine],
+  ["signals", "异动筛选", ScanLine],
   ["alerts", "预警中心", Bell],
   ["backtest", "历史回测", History],
   ["portfolio", "自选组合", Star],
@@ -82,7 +82,9 @@ const view = ref<View>("home"),
   period = ref(10);
 const homeData = ref<'live' | 'demo' | 'mx'>('live');
 const moduleData = ref<'real'|'demo'>('real');
-const liveInstrument = ref('XSHE:300059');
+const requestedStock = new URLSearchParams(window.location.search).get('stock') || sessionStorage.getItem('sentiment-live-instrument') || '';
+const liveInstrument = ref(/^(XSHE|XSHG|XBSE):\d{6}$/.test(requestedStock) ? requestedStock : 'XSHE:300059');
+watch(liveInstrument, id => sessionStorage.setItem('sentiment-live-instrument', id));
 const realModule = computed(() => view.value !== 'home' && moduleData.value === 'real');
 const showLive = computed(() => (view.value === 'home' && homeData.value === 'live') || (view.value === 'stock' && realModule.value));
 const showMx = computed(() => (view.value === 'home' && homeData.value === 'mx') || (['index','sector'].includes(view.value) && realModule.value));
@@ -164,13 +166,13 @@ const title = computed(
   () =>
     ({
       home: "市场情绪总览",
-      index: "大盘指数分析",
-      sector: "板块情绪分析",
+      index: moduleData.value === 'real' ? '大盘行情查询' : '大盘指数分析 · 演示',
+      sector: moduleData.value === 'real' ? '板块行情与条件筛选' : '板块情绪分析 · 演示',
       stock: "个股情绪分析",
       rankings: "情绪排行榜",
       signals: "情绪异动研究",
       alerts: "预警中心",
-      backtest: "历史情绪回测",
+      backtest: moduleData.value === 'real' ? '历史快照 · 真实回测待积累' : '历史情绪回测 · 演示',
       portfolio: "自选组合",
     })[view.value],
 );
@@ -542,7 +544,7 @@ onUnmounted(() => {
       >散户情绪量化<span>RETAIL SENTIMENT LAB</span></a
     >
     <div class="header-right">
-      <span class="data-status"><i></i>{{ showMx ? '妙想数据 · 按需查询' : showLive ? '真实个股采样 · 手动更新' : realModule ? '真实样本 · 有限覆盖' : '演示数据 · 与真实采样隔离' }}</span
+      <span class="data-status"><i></i>{{ showMx ? '妙想数据 · 按需查询' : showLive ? '真实个股采样 · 按需分析' : realModule ? '真实样本 · 有限覆盖' : '演示数据 · 与真实采样隔离' }}</span
       ><button v-if="installPrompt" class="secondary compact" @click="install">
         安装应用</button
       ><button

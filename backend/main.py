@@ -90,7 +90,7 @@ def analyze(db, iid, period):
         'limitations':['资金活跃度未接入，缺失维度不以50分填充，按可用权重重算。','热度是独立观察指标；综合分中的热度方向校准仍属模拟。','股吧样本不代表全体散户；板块样本不是完整行业成分。']}
 
 @app.get('/api/health')
-def health(): return {'status':'ok','version':'2.0.0','mode':'demo+live-sample','ai':'rules-only','live_source':True,'live_scope':'verified Shanghai/Shenzhen/Beijing A-shares; separate title/body samples; on-demand manual collection'}
+def health(): return {'status':'ok','version':'2.0.0','analysis_workflow':'collect-analyze-v1','mode':'demo+live-sample','ai':'rules-only','live_source':True,'live_scope':'verified Shanghai/Shenzhen/Beijing A-shares; separate title/body samples; on-demand manual collection'}
 
 def validate_live(iid):
     try: stock(iid)

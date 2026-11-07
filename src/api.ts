@@ -19,6 +19,8 @@ async function responseFor(
       },
     });
     if (!response.ok) {
+      if (response.status === 404 && path === '/live/analyze')
+        throw new Error('分析服务版本较旧，请重启本机服务后再分析（scripts/dev.ps1）。');
       let message = `请求失败 (${response.status})`;
       try {
         const data = await response.json();

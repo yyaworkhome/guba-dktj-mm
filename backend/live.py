@@ -5,6 +5,7 @@ from sqlalchemy import select
 from .eastmoney import IID, SOURCE, BODY_SOURCE, CST, STOCKS, stock, list_url
 from .models import Post, PostRevision, Classification, CollectionRun, QuoteObservation, Snapshot, Instrument
 from .research import utc, opinion_score, content_hash
+from .interpretation import interpret_sample
 
 def run_dict(run):
     if not run: return None
@@ -151,14 +152,18 @@ def live_analysis(db, days=1, as_of=None, iid=IID, content='titles'):
     for p, r, c in effective:
         day = utc(p.published_at).astimezone(CST).date().isoformat()
         daily.setdefault(day, Counter())[c.result['label']] += 1
+    stale = last_observation is None or cutoff - last_observation > timedelta(hours=24)
+    quote_data = {'observed_at': utc(quote.observed_at).isoformat(), 'bars': quote.bars} if quote else None
+    author_count = len({p.author_hash for p, r, c in effective})
     return {'data_mode': 'live', 'instrument_id': iid, 'code': code, 'name': name, 'source': source,
         'content': content, 'source_url': list_url(iid),
         'collector_command': f'.venv/Scripts/python.exe -m backend.collect --instrument {iid} --content {content}',
         'as_of': cutoff.isoformat(), 'last_post_observation': last_observation.isoformat() if last_observation else None,
-        'stale': last_observation is None or cutoff - last_observation > timedelta(hours=24),
+        'stale': stale,
         'days': days, 'range': [start.astimezone(CST).date().isoformat(), local_day.isoformat()], 'time_basis': 'Asia/Shanghai自然日，非交易日',
         'sampled_posts': len(latest), 'effective_posts': n, 'removed': dict(removed),
-        'authors': len({p.author_hash for p, r, c in effective}),
+        'authors': author_count,
+        'interpretation': interpret_sample(counts, n, author_count, stale, quote_data),
         'counts': {k: counts[k] for k in ('bullish', 'bearish', 'neutral')},
         'percentages': {k: round(counts[k]/n*100, 1) if n else None for k in ('bullish', 'bearish', 'neutral')},
         'opinion_score': opinion_score(counts['bullish'], counts['bearish']),
@@ -167,7 +172,7 @@ def live_analysis(db, days=1, as_of=None, iid=IID, content='titles'):
         'reads': sum(r.engagement.get('reads', 0) for p, r, c in effective),
         'keywords': [{'text': tag, 'count': count} for tag, count in tags.most_common(10)],
         'trend': [{'date': day, 'posts': sum(cs.values()), 'opinion_score': opinion_score(cs['bullish'], cs['bearish'])} for day, cs in sorted(daily.items())],
-        'quote': {'observed_at': utc(quote.observed_at).isoformat(), 'bars': quote.bars} if quote else None,
+        'quote': quote_data,
         'examples': [{'source_id': p.source_id, 'excerpt': r.text[:180], 'url': r.engagement.get('url'),
             'label': c.result['label'], 'published_at': utc(p.published_at).isoformat(),
             'first_seen_at': utc(p.first_seen_at).isoformat(), 'observed_at': utc(r.observed_at).isoformat()}
