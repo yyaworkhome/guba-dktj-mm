@@ -213,6 +213,102 @@ def test_community_scan_uses_its_own_observation_and_classifier(db,ai_config,mon
     assert db.scalar(select(func.count()).select_from(CollectionRun))==0
 
 
+def test_budget_does_not_stop_collection_and_waiting_ai_resumes_from_saved_samples(db,ai_config,monkeypatch):
+    import backend.community as community
+    from backend.scanner import queue_scan,method_config,process_item,finish_collection
+    from backend.market_scan import job_dict,rankings
+    from backend.models import MarketReport
+    row=observation(db,22)
+    db.add(UniverseSync(status='success',total=1,members=['XSHG:600519']));db.commit()
+    job=queue_scan(db,method=method_config('sina','ai'));item=db.scalar(select(ScanItem))
+    monkeypatch.setenv('SENTIMENT_AI_DAILY_CALL_LIMIT','0')
+    monkeypatch.setattr(community,'probe',lambda *a:(row,True))
+    assert process_item(db,job,item,None) and item.status=='awaiting_ai' and job.status=='queued'
+    data=job_dict(db,job)['coverage']
+    assert data['collected']==1 and data['classified']==0 and data['awaiting_ai']==1
+    assert rankings(scan_id=job.id,limit=30,db=db)['bullish']==[]
+    assert finish_collection(db,job) and job.status=='waiting_ai' and job.active_key is None
+    assert db.scalar(select(func.count()).select_from(MarketReport))==1
+    monkeypatch.setenv('SENTIMENT_AI_DAILY_CALL_LIMIT','1')
+    monkeypatch.setattr(community,'probe',lambda *a:pytest.fail('fresh deferred observation must not be fetched again'))
+    with httpx.Client(transport=httpx.MockTransport(response_for)) as client:assert process_item(db,job,item,client)
+    assert item.status=='eligible' and configuration(db)['calls_today']==1
+    assert finish_collection(db,job) and job.status=='completed'
+    assert db.scalar(select(func.count()).select_from(MarketReport))==2
+
+
+def test_scan_does_not_spend_ai_on_samples_that_cannot_reach_ranking_threshold(db,ai_config,monkeypatch):
+    import backend.community as community
+    from backend.scanner import queue_scan,method_config,process_item
+    row=observation(db,5)
+    db.add(UniverseSync(status='success',total=1,members=['XSHG:600519']));db.commit()
+    job=queue_scan(db,method=method_config('sina','ai'));item=db.scalar(select(ScanItem))
+    monkeypatch.setattr(community,'probe',lambda *a:(row,True))
+    assert process_item(db,job,item,None) and item.status=='insufficient'
+    assert item.result['raw_posts']==5 and item.result['classification_status']=='not_requested'
+    assert 'counts' not in item.result and 'opinion_score' not in item.result
+    assert configuration(db)['calls_today']==0
+
+
+def test_deferred_stale_samples_are_refetched_before_classification(db,ai_config,monkeypatch):
+    import backend.community as community
+    from backend.scanner import queue_scan,method_config,process_item
+    old=observation(db,22);old.finished_at=datetime.now(timezone.utc)-timedelta(hours=25);db.commit()
+    fresh=observation(db,22)
+    db.add(UniverseSync(status='success',total=1,members=['XSHG:600519']));db.commit()
+    job=queue_scan(db,method=method_config('sina','ai'));item=db.scalar(select(ScanItem))
+    item.status='awaiting_ai';item.result={'probe_id':old.id};db.commit()
+    calls=[]
+    def refresh(*a):calls.append(True);return fresh,False
+    monkeypatch.setattr(community,'probe',refresh)
+    with httpx.Client(transport=httpx.MockTransport(response_for)) as client:assert process_item(db,job,item,client)
+    assert len(calls)==1 and item.result['probe_id']==fresh.id and item.status=='eligible'
+    assert old.finished_at<datetime.now(timezone.utc)-timedelta(hours=24)
+
+
+def test_scan_can_reuse_completed_ai_result_even_when_daily_budget_is_exhausted(db,ai_config,monkeypatch):
+    import backend.community as community
+    from backend.scanner import queue_scan,method_config,process_item
+    row=observation(db,22)
+    monkeypatch.setenv('SENTIMENT_AI_DAILY_CALL_LIMIT','1')
+    with httpx.Client(transport=httpx.MockTransport(response_for)) as client:analysis,_=analyze_probe(db,client,row)
+    db.add(UniverseSync(status='success',total=1,members=['XSHG:600519']));db.commit()
+    job=queue_scan(db,method=method_config('sina','ai'));item=db.scalar(select(ScanItem))
+    monkeypatch.setattr(community,'probe',lambda *a:(row,True))
+    assert process_item(db,job,item,None) and item.result['analysis_id']==analysis.id
+    assert item.status=='eligible' and configuration(db)['calls_today']==1
+
+
+def test_model_network_retry_preserves_observation_and_does_not_repeat_source_request(db,ai_config,monkeypatch):
+    import backend.community as community
+    from backend.scanner import queue_scan,method_config,process_item
+    row=observation(db,22)
+    db.add(UniverseSync(status='success',total=1,members=['XSHG:600519']));db.commit()
+    job=queue_scan(db,method=method_config('sina','ai'));item=db.scalar(select(ScanItem))
+    monkeypatch.setattr(community,'probe',lambda *a:(row,True))
+    def network_error(request):raise httpx.ReadTimeout('mock network failure',request=request)
+    with httpx.Client(transport=httpx.MockTransport(network_error)) as client:assert process_item(db,job,item,client)
+    assert item.status=='awaiting_ai' and item.result['probe_id']==row.id
+    assert item.result['error_code']=='model_network' and item.result['next_retry_at']
+    item.result={**item.result,'next_retry_at':(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()};db.commit()
+    monkeypatch.setattr(community,'probe',lambda *a:pytest.fail('model retry must reuse saved source observation'))
+    with httpx.Client(transport=httpx.MockTransport(response_for)) as client:assert process_item(db,job,item,client)
+    assert item.status=='eligible' and len(item.result['retry_history'])==1
+
+
+def test_model_access_failure_defers_ai_instead_of_stopping_public_collection(db,ai_config,monkeypatch):
+    import backend.community as community
+    from backend.scanner import queue_scan,method_config,process_item
+    row=observation(db,22)
+    db.add(UniverseSync(status='success',total=1,members=['XSHG:600519']));db.commit()
+    job=queue_scan(db,method=method_config('sina','ai'));item=db.scalar(select(ScanItem))
+    monkeypatch.setattr(community,'probe',lambda *a:(row,True))
+    with httpx.Client(transport=httpx.MockTransport(lambda r:httpx.Response(401,text='denied'))) as client:
+        assert process_item(db,job,item,client)
+    assert item.status=='awaiting_ai' and job.status=='queued'
+    assert configuration(db)['cooldown'] and item.result['classification_status']=='waiting'
+
+
 def test_report_only_compares_same_method_and_does_not_invent_market_index(db,ai_config):
     from backend.scanner import queue_scan,method_config
     from backend.market_scan import report

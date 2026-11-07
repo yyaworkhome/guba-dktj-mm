@@ -1,6 +1,7 @@
 """Public progress and immutable daily rankings; loopback-only job controls."""
 import csv
 import io
+from typing import Literal
 from fastapi import APIRouter, Depends, Request, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -20,13 +21,37 @@ def allowed(request):
     if not enabled_for(request): raise HTTPException(403,'扫描管理仅对已开启本机采集的服务开放。')
 
 
+def coverage(db,job):
+    totals={name:0 for name in ('total','attempted','collected','classified','eligible','awaiting_ai','source_failed','model_failed','insufficient')}
+    exchanges={name:{**totals,'exchange':name} for name in ('XSHG','XSHE','XBSE')}
+    rows=db.execute(select(ScanItem.instrument_id,ScanItem.status,
+        ScanItem.result['probe_id'].as_integer(),ScanItem.result['collection_status'].as_string(),
+        ScanItem.result['analysis_id'].as_integer(),ScanItem.result['effective_posts'].as_integer(),
+        ScanItem.result['error_code'].as_string()).where(ScanItem.scan_id==job.id))
+    for iid,status,probe_id,collected,analysis_id,effective,code in rows:
+        group=exchanges.get(iid.split(':')[0])
+        values={'total':1,'attempted':int(status!='pending' or probe_id is not None),
+            'collected':int(collected=='samples' or effective is not None and effective>0 or (code or '').startswith('model_')),
+            'classified':int(analysis_id is not None or effective is not None),
+            'eligible':int(status=='eligible'),'awaiting_ai':int(status=='awaiting_ai'),
+            'source_failed':int(status=='failed' and not (code or '').startswith('model_')),
+            'model_failed':int(status=='failed' and (code or '').startswith('model_')),
+            'insufficient':int(status=='insufficient')}
+        for key,value in values.items():
+            totals[key]+=value
+            if group is not None:group[key]+=value
+    for key in ('collected','classified','eligible'):
+        totals[key+'_pct']=round(totals[key]/job.total*100,2) if job.total else 0
+    return {**totals,'exchanges':list(exchanges.values())}
+
+
 def job_dict(db, job):
     if not job: return None
     counts = dict(db.execute(select(ScanItem.status,func.count()).where(ScanItem.scan_id==job.id).group_by(ScanItem.status)).all())
     return {'id':job.id,'status':job.status,'total':job.total,'counts':counts,'days':job.days,
             'created_at':utc(job.created_at).isoformat(),'finished_at':utc(job.finished_at).isoformat() if job.finished_at else None,
-            'error':job.error,'processed':job.total-counts.get('pending',0),'method':scan_method(db,job),
-            'retry_waiting':db.scalar(select(func.count()).select_from(ScanItem).where(ScanItem.scan_id==job.id,ScanItem.status=='pending',ScanItem.result['next_retry_at'].as_string().is_not(None)))}
+            'error':job.error,'processed':job.total-counts.get('pending',0),'method':scan_method(db,job),'coverage':coverage(db,job),
+            'retry_waiting':db.scalar(select(func.count()).select_from(ScanItem).where(ScanItem.scan_id==job.id,ScanItem.status.in_(['pending','awaiting_ai']),ScanItem.result['next_retry_at'].as_string().is_not(None)))}
 
 
 def selected_job(db, scan_id):
@@ -41,13 +66,15 @@ def status(request:Request, db=Depends(get_db)):
     latest = db.scalar(select(UniverseSync).order_by(UniverseSync.id.desc()))
     config = db.get(ScanSchedule,1)
     jobs = list(db.scalars(select(MarketScan).order_by(MarketScan.id.desc()).limit(20)))
+    from .sentiment_ai import configuration
     return {'enabled':enabled_for(request),'worker_ready':worker.ready,
             'universe':{'total':universe.total,'observed_at':utc(universe.finished_at).isoformat()} if universe else None,
             'directory_error': latest.error if latest and latest.status=='failed' else '',
             'schedule':{'enabled':bool(config and config.enabled),'hour':config.hour if config else 16,'minute':config.minute if config else 10,
                 'method':db.get(CommunitySchedule,1).config if db.get(CommunitySchedule,1) else method_config()},
             'job':job_dict(db,jobs[0]) if jobs else None,
-            'history':[{'id':j.id,'created_at':utc(j.created_at).isoformat(),'status':j.status} for j in jobs]}
+            'history':[{'id':j.id,'created_at':utc(j.created_at).isoformat(),'status':j.status} for j in jobs],
+            'ai':configuration(db) if enabled_for(request) else None}
 
 
 @router.post('/directory')
@@ -71,10 +98,6 @@ def start(body:StartBody,request:Request, db=Depends(get_db)):
     if not worker.ready: raise HTTPException(503,'扫描工作进程尚未就绪，请重启本机服务。')
     try:
         method=method_config(body.source,body.mode)
-        if body.mode=='ai':
-            from .sentiment_ai import configuration
-            state=configuration(db)
-            if not state['configured'] or state['cooldown']:raise ValueError(state['error'])
         return job_dict(db,queue_scan(db,method=method))
     except ValueError as exc: raise HTTPException(409,str(exc))
 
@@ -108,6 +131,8 @@ class ControlBody(BaseModel):
 def control(body:ControlBody, request:Request, db=Depends(get_db)):
     allowed(request)
     job=db.scalar(select(MarketScan).where(MarketScan.active_key=='active'))
+    if not job and body.action in ('cancel','pause','resume'):
+        job=db.scalar(select(MarketScan).where(MarketScan.status=='waiting_ai').order_by(MarketScan.id.desc()))
     if body.action=='retry_failed':
         job=job or db.scalar(select(MarketScan).order_by(MarketScan.id.desc()))
         if not job: raise HTTPException(409,'暂无可重试批次。')
@@ -129,6 +154,7 @@ def control(body:ControlBody, request:Request, db=Depends(get_db)):
         job.status='queued'
     elif body.action=='pause': job.status='paused'
     else: job.status='queued';job.error=''
+    job.active_key='active'
     db.commit()
     return job_dict(db,job)
 
@@ -142,7 +168,7 @@ def rankings(scan_id:int|None=None,limit:int=Query(30,ge=1,le=100),db=Depends(ge
     return {'job':job_dict(db,job),'bullish':sorted(eligible,key=lambda r:(-r['opinion_score'],r['id']))[:limit],
             'bearish':sorted(eligible,key=lambda r:(r['opinion_score'],r['id']))[:limit],
             'method':f"{method['source']} / {method['model']}；"+('近3自然日标题样本；' if method['basis']=='publication' else '公开列表观察快照，非近3日发帖总量；')+'至少20条有效样本、10位作者、10条方向样本且24小时内观察。',
-            'scope':'进行中的批次仅为部分排名；完成后覆盖本批完整目录，失败与不足样本不参与排序。'}
+            'scope':'采样、分类和入榜覆盖分别统计。AI待处理、失败与不足样本不参与排序；采样结束不代表全市场AI分类完成。'}
 
 
 @router.get('/report')
@@ -184,9 +210,10 @@ def save_report(db,job):
 
 
 @router.get('/items')
-def items(scan_id:int|None=None,offset:int=Query(0,ge=0),limit:int=Query(30,ge=1,le=100),db=Depends(get_db)):
+def items(scan_id:int|None=None,offset:int=Query(0,ge=0),limit:int=Query(30,ge=1,le=100),state:Literal['awaiting_ai','failed','insufficient','eligible']|None=None,db=Depends(get_db)):
     job=selected_job(db,scan_id)
-    rows=list(db.scalars(select(ScanItem).where(ScanItem.scan_id==job.id,ScanItem.status!='pending').order_by(ScanItem.id).offset(offset).limit(limit))) if job else []
+    rows=list(db.scalars(select(ScanItem).where(ScanItem.scan_id==job.id,
+        ScanItem.status==state if state else ScanItem.status!='pending').order_by(ScanItem.id).offset(offset).limit(limit))) if job else []
     return {'items':[{'status':r.status,**r.result} for r in rows]}
 
 
@@ -196,9 +223,9 @@ def export(scan_id:int|None=None,db=Depends(get_db)):
     if not job: raise HTTPException(404,'尚无扫描批次。')
     out=io.StringIO();out.write('\ufeff');writer=csv.writer(out)
     method=scan_method(db,job)
-    writer.writerow(['批次','状态','来源','模型','提示词或规则版本','时间口径','证券ID','名称','舆论分','有效样本','作者','看多','看空','中性或未识别','观察时间','未入榜或失败原因'])
+    writer.writerow(['批次','状态','来源','模型','提示词或规则版本','时间口径','证券ID','名称','舆论分','有效样本','作者','看多','看空','中性或未识别','观察时间','未入榜或失败原因','采样状态','分类状态','原始帖子','预筛可用帖子'])
     for item in db.scalars(select(ScanItem).where(ScanItem.scan_id==job.id).order_by(ScanItem.id)):
         r=item.result;c=r.get('counts',{})
-        values=[job.id,item.status,method['source'],method['model'],method['version'],method['basis'],item.instrument_id,r.get('name',''),r.get('opinion_score',''),r.get('effective_posts',''),r.get('authors',''),c.get('bullish',''),c.get('bearish',''),c.get('neutral',''),r.get('observed_at',''),r.get('error') or '；'.join(r.get('reasons',[]))]
+        values=[job.id,item.status,method['source'],method['model'],method['version'],method['basis'],item.instrument_id,r.get('name',''),r.get('opinion_score',''),r.get('effective_posts',''),r.get('authors',''),c.get('bullish',''),c.get('bearish',''),c.get('neutral',''),r.get('observed_at',''),r.get('error') or r.get('waiting_reason') or '；'.join(r.get('reasons',[])),r.get('collection_status',''),r.get('classification_status',''),r.get('raw_posts',''),r.get('candidate_posts','')]
         writer.writerow([("'"+v if isinstance(v,str) and v.startswith(('=','+','-','@','\t','\r')) else v) for v in values])
     return StreamingResponse(iter([out.getvalue().encode('utf-8')]),media_type='text/csv',headers={'Content-Disposition':f'attachment; filename="market-scan-{job.id}.csv"'})

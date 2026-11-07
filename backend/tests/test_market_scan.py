@@ -119,3 +119,35 @@ def test_scan_only_stops_for_actual_access_barrier_or_sustained_failure():
     assert '验证' in source_pause_reason({'error_code':'access_required','error':'身份核实'},1)
     assert '网络' in source_pause_reason({'error_code':'network','error':'网络错误'},3)
     assert source_pause_reason({'error_code':'source_format','error':'结构异常'},10)
+    assert source_pause_reason({'error_code':'source_unavailable','error':'HTTP 404'},10) is None
+
+
+def test_pending_selection_balances_exchanges_and_skips_future_retries(db):
+    from backend.scanner import next_pending_item
+    universe(db,['XBSE:920002','XBSE:920016','XSHG:600900','XSHG:600519','XSHE:000001','XSHE:300059'])
+    job=queue_scan(db)
+    first=next_pending_item(db,job);assert first.instrument_id.startswith('XSHG:')
+    first.status='insufficient';db.commit()
+    second=next_pending_item(db,job);assert second.instrument_id.startswith('XSHE:')
+    second.status='insufficient';db.commit()
+    third=next_pending_item(db,job);assert third.instrument_id.startswith('XBSE:')
+    third.result={'next_retry_at':(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()};db.commit()
+    other=next_pending_item(db,job)
+    assert other.instrument_id.startswith('XBSE:') and other.id!=third.id
+
+
+def test_coverage_separates_collected_classified_and_ranked_without_inventing_scores(db):
+    universe(db,['XSHE:000001','XSHG:600900','XBSE:920002'])
+    job=queue_scan(db)
+    rows=list(db.scalars(select(ScanItem).order_by(ScanItem.id)))
+    rows[0].status='awaiting_ai';rows[0].result={'probe_id':1,'collection_status':'samples','raw_posts':30}
+    rows[1].status='eligible';rows[1].result={'effective_posts':22,'opinion_score':80,'analysis_id':1}
+    rows[2].status='failed';rows[2].result={'error_code':'source_unavailable'};db.commit()
+    data=job_dict(db,job)['coverage']
+    assert data['collected']==2 and data['classified']==1 and data['eligible']==1
+    assert data['awaiting_ai']==1 and data['source_failed']==1
+    assert sum(r['total'] for r in data['exchanges'])==3
+    assert data['collected_pct']==66.67 and data['classified_pct']==33.33
+    from backend.market_scan import items
+    waiting=items(scan_id=job.id,offset=0,limit=30,state='awaiting_ai',db=db)['items']
+    assert len(waiting)==1 and waiting[0]['status']=='awaiting_ai' and 'opinion_score' not in waiting[0]
