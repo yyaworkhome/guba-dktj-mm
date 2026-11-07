@@ -403,7 +403,7 @@ async function loadPrivate() {
       request<Alert[]>("/alerts"),
     ]);
     const analyses = await Promise.all(
-      (showDemo.value && view.value==='portfolio' ? w : []).map((i) =>
+      (showDemo.value && view.value==='portfolio' ? w.filter(i=>i.demo_available!==false) : []).map((i) =>
         request<Analysis>(
           `/analysis?instrument_id=${encodeURIComponent(i.id)}&period=10`,
         ),
@@ -608,7 +608,7 @@ onUnmounted(() => {
       <button :class="['secondary', { selected: homeData === 'demo' }]" :aria-pressed="homeData === 'demo'" @click="switchHomeData('demo')">全功能演示 · 模拟样本</button>
     </div>
     <div v-if="view!=='home'" class="page-filters" role="group" aria-label="栏目数据来源"><button :class="['secondary',{selected:moduleData==='real'}]" :aria-pressed="moduleData==='real'" @click="switchModuleData('real')">真实数据</button><button :class="['secondary',{selected:moduleData==='demo'}]" :aria-pressed="moduleData==='demo'" @click="switchModuleData('demo')">模拟演示</button></div>
-    <LivePanel v-if="showLive" :initial-instrument="liveInstrument" :key="`live-${view}-${liveInstrument}`" />
+    <LivePanel v-if="showLive" :initial-instrument="liveInstrument" :username="username" @login="modal='auth'" @select="liveInstrument=$event" :key="`live-${view}`" />
     <MiaoxiangPanel v-if="showMx" :key="view" :context="view==='index'?'index':view==='sector'?'sector':undefined" :username="username" @login="modal = 'auth'" />
     <LiveAccountPanel v-if="realModule&&(view==='alerts'||view==='portfolio')" :key="view" :view="view" :username="username" @login="modal='auth'" @select="openLiveInstrument" />
     <LiveResearchPanel v-if="realModule&&(view==='rankings'||view==='signals'||view==='backtest')" :key="view" :view="view" @select="openLiveInstrument" />
@@ -859,6 +859,7 @@ onUnmounted(() => {
           <p class="subtle section-note">
             展示近10日各自指标，不把不同覆盖率的对象直接合成一个组合分。
           </p>
+          <p v-for="i in watches.filter(s=>s.demo_available===false)" :key="i.id" class="empty-note">{{i.name}} {{i.code}}没有模拟样本；<button class="text-button" @click="openLiveInstrument(i.id)">查看真实数据</button>，或<button class="text-button" @click="removeWatch(i)">移除自选</button>。</p>
           <div class="table-scroll">
             <table>
               <thead>
@@ -992,7 +993,7 @@ onUnmounted(() => {
         ><h2>
           {{ authMode === "login" ? "连接你的研究工作台" : "创建统一账号" }}
         </h2>
-        <p class="subtle">账号与自选保存在当前连接的后端。股吧采样无需登录；妙想查询、自选和预警需登录。</p>
+        <p class="subtle">账号与自选保存在当前连接的后端。查询已保存股吧样本无需登录；发起采集、妙想查询、自选和预警需登录。</p>
         <form class="auth-form" @submit.prevent="authenticate">
           <label for="username">用户名</label
           ><input

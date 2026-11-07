@@ -1,5 +1,6 @@
 export type Kind = "market" | "index" | "stock" | "sector" | "portfolio";
 export interface Instrument {
+  demo_available?: boolean;
   id: string;
   code: string;
   name: string;

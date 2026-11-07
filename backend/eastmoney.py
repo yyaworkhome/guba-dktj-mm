@@ -30,8 +30,13 @@ KLINE_URL = ('https://push2his.eastmoney.com/api/qt/stock/kline/get'
 CST = timezone(timedelta(hours=8))
 
 def stock(iid=IID):
-    if iid not in STOCKS: raise ValueError('真实采样仅支持已开放的股票；请使用交易所加代码，不支持指数')
-    return STOCKS[iid]
+    if iid in STOCKS: return STOCKS[iid]
+    # Identity must be verified against the remote directory before collection.
+    # Prefix checks only prevent indices, funds and arbitrary URLs entering this adapter.
+    if re.fullmatch(r'XSHG:6\d{5}', iid): return iid[5:], iid[5:], 1
+    if re.fullmatch(r'XSHE:(?:00|30)\d{4}', iid): return iid[5:], iid[5:], 0
+    if re.fullmatch(r'XBSE:920\d{3}', iid): return iid[5:], iid[5:], 0
+    raise ValueError('请使用明确的沪深北A股证券ID；此采样接口不支持指数、基金或裸代码')
 
 def list_url(iid=IID): return f'https://guba.eastmoney.com/list,{stock(iid)[0]}.html'
 
@@ -68,11 +73,21 @@ def plain(value):
     return unescape(''.join(p.parts)).strip()
 
 def get_document(client, url):
-    # URLs are generated from an explicit stock allowlist. Arbitrary hosts,
-    # query parameters and redirected destinations are never requested.
-    allowed = any(url in (list_url(iid), kline_url(iid)) or
-        re.fullmatch(re.escape(f'https://guba.eastmoney.com/news,{code},') + r'\d{1,30}\.html', url)
-        for iid, (code, _, _) in STOCKS.items())
+    # Only exact generated URLs on fixed hosts, with a valid stock code, are allowed.
+    match = re.fullmatch(r'https://guba\.eastmoney\.com/(?:list,(\d{6})\.html|news,(\d{6}),\d{1,30}\.html)', url)
+    code = (match[1] or match[2]) if match else None
+    if code:
+        exchange = 'XSHG' if code.startswith('6') else 'XBSE' if code.startswith('920') else 'XSHE'
+        try: stock(f'{exchange}:{code}'); allowed = True
+        except ValueError: allowed = False
+    else:
+        match = re.search(r'[?&]secid=([01])\.(\d{6})&', url)
+        allowed = False
+        if match:
+            code = match[2]
+            exchange = 'XSHG' if match[1] == '1' else 'XBSE' if code.startswith('920') else 'XSHE'
+            try: allowed = url == kline_url(f'{exchange}:{code}')
+            except ValueError: pass
     if not allowed: raise SourceError('不支持的数据地址')
     with client.stream('GET', url, follow_redirects=False, timeout=15) as response:
         if response.status_code != 200:

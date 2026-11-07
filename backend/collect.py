@@ -3,6 +3,7 @@ import argparse
 import json
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from .database import Base, engine, SessionLocal, DATA_DIR
@@ -12,7 +13,23 @@ from .eastmoney import (IID, SOURCE, BODY_SOURCE, CST, STOCKS, SourceError, Sour
     list_url, kline_url, detail_url, default_client, get_document, parse_titles, parse_body, parse_bars, document_digest)
 from .live import live_analysis, run_dict
 from .research import utc
+from .securities import ensure_stock
 import httpx
+
+
+@contextmanager
+def collector_lock():
+    """CLI and local web requests share the same exclusive local lock."""
+    lock = DATA_DIR / 'collector.lock'
+    try:
+        handle = lock.open('x')
+    except FileExistsError as exc:
+        raise ValueError('已有采集正在运行或存在遗留锁，请先检查采集状态。') from exc
+    try:
+        with handle:
+            yield
+    finally:
+        lock.unlink(missing_ok=True)
 
 def collect_bodies(client, candidates, iid, limit):
     chosen = sorted(candidates, key=lambda p: (p['published_at'], int(p['source_id'])), reverse=True)[:limit]
@@ -42,9 +59,7 @@ def collect(db, client, iid=IID, content='titles', limit=3):
     now = datetime.now(timezone.utc)
     if latest and now - utc(latest.started_at) < timedelta(minutes=10):
         raise ValueError('采样间隔至少10分钟，请稍后运行；没有发起源站请求。')
-    if not db.get(Instrument, iid):
-        db.add(Instrument(id=iid, code=code, name=name, kind='stock', exchange=iid.split(':')[0], aliases=[], scope={'boards': [name]}))
-        db.flush()
+    ensure_stock(db, iid, client)
     run = CollectionRun(instrument_id=iid, started_at=now, status='running')
     db.add(run); db.commit()
     details = {'_meta': {'source': source, 'content': content}}
@@ -106,26 +121,18 @@ def collect(db, client, iid=IID, content='titles', limit=3):
 
 def main():
     parser = argparse.ArgumentParser(description='公开股吧限量采样；默认标题，正文每批最多5条')
-    parser.add_argument('--instrument', default=IID, choices=list(STOCKS))
+    parser.add_argument('--instrument', default=IID, help='明确沪深北A股ID，例如XSHE:002594；新证券先核验目录')
     parser.add_argument('--content', default='titles', choices=['titles', 'body'])
     parser.add_argument('--limit', default=3, type=int, choices=range(1,6))
     args = parser.parse_args()
     Base.metadata.create_all(engine)
-    # Prevent concurrent collectors in this local deployment. No hidden scheduler.
-    lock = DATA_DIR / 'collector.lock'
     try:
-        handle = lock.open('x')
-    except FileExistsError:
-        print('已有采集进程或遗留锁，请先检查 backend/data/collector.lock。'); return 1
-    try:
-        with handle, SessionLocal() as db, default_client() as client:
+        with collector_lock(), SessionLocal() as db, default_client() as client:
             result = collect(db, client, args.instrument, args.content, args.limit)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result['status'] == 'success' else 1
     except ValueError as exc:
         print(str(exc)); return 1
-    finally:
-        lock.unlink(missing_ok=True)
 
 if __name__ == '__main__':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')

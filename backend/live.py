@@ -3,7 +3,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from .eastmoney import IID, SOURCE, BODY_SOURCE, CST, STOCKS, stock, list_url
-from .models import Post, PostRevision, Classification, CollectionRun, QuoteObservation, Snapshot
+from .models import Post, PostRevision, Classification, CollectionRun, QuoteObservation, Snapshot, Instrument
 from .research import utc, opinion_score, content_hash
 
 def run_dict(run):
@@ -17,10 +17,16 @@ def source_for(content):
 
 def run_source(run): return run.details.get('_meta', {}).get('source', SOURCE)
 
-def live_catalog(q=''):
+def live_catalog(q='',db=None):
     q = q.strip().lower()
-    return [{'id': iid, 'code': code, 'name': name, 'exchange': iid.split(':')[0], 'kind': 'stock'}
-        for iid, (code, name, _) in STOCKS.items() if not q or q in f'{iid} {code} {name}'.lower()]
+    rows = {iid: {'id':iid,'code':code,'name':name,'exchange':iid.split(':')[0],'kind':'stock'}
+        for iid,(code,name,_) in STOCKS.items()}
+    if db is not None:
+        for i in db.scalars(select(Instrument).where(Instrument.kind=='stock')):
+            meta=(i.scope or {}).get('live_directory')
+            if meta:
+                rows[i.id]={'id':i.id,'code':i.code,'name':meta['name'],'exchange':i.exchange,'kind':'stock'}
+    return [r for r in rows.values() if not q or q in f'{r["id"]} {r["code"]} {r["name"]}'.lower()]
 
 def source_status(db, iid=IID, content='titles'):
     stock(iid); source = source_for(content)
@@ -69,7 +75,9 @@ def live_rankings(db, days=3, content='titles', sort='opinion_score', as_of=None
         raise ValueError('不支持的排行榜排序')
     cutoff = as_of or datetime.now(timezone.utc)
     rows = []
-    for instrument in live_catalog():
+    collected = set(db.scalars(select(CollectionRun.instrument_id).distinct())) | set(STOCKS)
+    instruments = [i for i in live_catalog(db=db) if i['id'] in collected]
+    for instrument in instruments:
         a = live_analysis(db, days=days, as_of=cutoff, iid=instrument['id'], content=content)
         directional = a['counts']['bullish'] + a['counts']['bearish']
         reasons = []
@@ -87,14 +95,16 @@ def live_rankings(db, days=3, content='titles', sort='opinion_score', as_of=None
     for i, r in enumerate(ranked, 1): r['rank'] = i
     return {'data_mode': 'live', 'as_of': cutoff.isoformat(), 'days': days, 'content': content,
         'sort': sort, 'minimums': RANK_MINIMUMS, 'ranked': ranked,
-        'unranked': [r for r in rows if not r['eligible']], 'scope_size': len(STOCKS),
-        'scope': '仅5只白名单股票，同一自然日窗口与内容口径；不是全市场排名。',
+        'unranked': [r for r in rows if not r['eligible']], 'scope_size': len(instruments),
+        'scope': '已采集股票和初始观察样本，同一自然日窗口与内容口径；不是全市场排名。',
         'limitations': ['最低样本门槛为开发阈值，未完成统计校准；达标不代表具有预测价值。',
             '不同股吧采集时间与选择偏差仍可能不同；排序只比较已保存的有限样本。',
             '有效样本量不是单位时间新增发帖量，不代表热度增长；不计算升温或收益预测。']}
 
 def live_analysis(db, days=1, as_of=None, iid=IID, content='titles'):
     code, name, _ = stock(iid); source = source_for(content)
+    instrument=db.get(Instrument,iid)
+    if instrument: name=((instrument.scope or {}).get('live_directory') or {}).get('name',instrument.name)
     cutoff = as_of or datetime.now(timezone.utc)
     local_day = cutoff.astimezone(CST).date()
     start = datetime.combine(local_day - timedelta(days=days-1), datetime.min.time(), CST).astimezone(timezone.utc)

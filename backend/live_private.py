@@ -14,6 +14,17 @@ from .live import live_analysis, RANK_MINIMUMS
 router = APIRouter(prefix='/api/live')
 
 
+def supported(db,iid):
+    try: stock(iid)
+    except ValueError: return False
+    item=db.get(Instrument,iid)
+    return iid in STOCKS or bool(item and (item.scope or {}).get('live_directory'))
+
+
+def require_supported(db,iid):
+    if not supported(db,iid): raise HTTPException(422,'请先按股票名称或代码搜索并选择已核验的A股')
+
+
 def sample_quality(a):
     reasons = []
     directional = a['counts']['bullish'] + a['counts']['bearish']
@@ -34,6 +45,7 @@ class LiveAlertBody(BaseModel):
 
 @router.post('/alerts')
 def create_rule(body: LiveAlertBody, user=Depends(current_user), db=Depends(get_db)):
+    require_supported(db,body.instrument_id)
     try: code, name, _ = stock(body.instrument_id)
     except ValueError as exc: raise HTTPException(422, str(exc))
     values = body.model_dump()
@@ -88,7 +100,7 @@ def watchlist(days: int = Query(3, ge=1, le=30), content: Literal['titles','body
                       .where(WatchItem.user_id == user.id).order_by(WatchItem.id)).all()
     for _, i in rows:
         item = {'id': i.id, 'code': i.code, 'name': i.name, 'kind': i.kind, 'exchange': i.exchange,
-                'supported': i.id in STOCKS, 'analysis': None}
+                'supported': supported(db,i.id), 'analysis': None}
         if item['supported']:
             a = live_analysis(db, iid=i.id, days=days, content=content, as_of=cutoff)
             item['analysis'] = {key: a[key] for key in ('opinion_score','effective_posts','authors',
@@ -104,6 +116,7 @@ class LiveWatchBody(BaseModel):
 
 @router.put('/watchlist')
 def add_watch(body: LiveWatchBody, user=Depends(current_user), db=Depends(get_db)):
+    require_supported(db,body.instrument_id)
     try: code, name, _ = stock(body.instrument_id)
     except ValueError as exc: raise HTTPException(422, str(exc))
     if not db.get(Instrument, body.instrument_id):

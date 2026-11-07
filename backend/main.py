@@ -23,6 +23,9 @@ from .live import source_status, live_analysis, live_catalog, snapshot_timeline,
 from .eastmoney import IID, stock
 from .miaoxiang import router as mx_router
 from .live_private import router as live_private_router
+from .local_collection import router as local_collection_router
+from .securities import router as securities_router
+from .live_export import router as live_export_router
 
 @asynccontextmanager
 async def lifespan(app):
@@ -34,6 +37,9 @@ async def lifespan(app):
 app = FastAPI(title='散户情绪量化 API', version='2.0.0', lifespan=lifespan)
 app.include_router(mx_router)
 app.include_router(live_private_router)
+app.include_router(local_collection_router)
+app.include_router(securities_router)
+app.include_router(live_export_router)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,https://localhost,http://tauri.localhost,tauri://localhost').split(','), allow_credentials=False, allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Authorization','Content-Type'])
 
 @app.middleware('http')
@@ -55,6 +61,9 @@ def ensure_instrument(db, iid):
 def history(db, iid):
     # Immutable demo-v1 only. Live snapshots must be isolated, never mixed with fixtures.
     return list(db.scalars(select(Snapshot).where(Snapshot.instrument_id==iid, Snapshot.version=='demo-v1', Snapshot.data_mode=='demo').order_by(Snapshot.session_date)))
+
+def demo_ids():
+    return select(Snapshot.instrument_id).where(Snapshot.version=='demo-v1',Snapshot.data_mode=='demo').distinct()
 
 def analyze(db, iid, period):
     i = ensure_instrument(db, iid)
@@ -81,15 +90,15 @@ def analyze(db, iid, period):
         'limitations':['资金活跃度未接入，缺失维度不以50分填充，按可用权重重算。','热度是独立观察指标；综合分中的热度方向校准仍属模拟。','股吧样本不代表全体散户；板块样本不是完整行业成分。']}
 
 @app.get('/api/health')
-def health(): return {'status':'ok','version':'2.0.0','mode':'demo+live-sample','ai':'rules-only','live_source':True,'live_scope':'5 allowlisted stocks; separate title/body samples; manual collection'}
+def health(): return {'status':'ok','version':'2.0.0','mode':'demo+live-sample','ai':'rules-only','live_source':True,'live_scope':'verified Shanghai/Shenzhen/Beijing A-shares; separate title/body samples; on-demand manual collection'}
 
 def validate_live(iid):
     try: stock(iid)
     except ValueError as exc: raise HTTPException(422, str(exc))
 
 @app.get('/api/live/instruments')
-def live_instruments(q:str=Query('',max_length=40)):
-    return live_catalog(q)
+def live_instruments(q:str=Query('',max_length=40),db=Depends(get_db)):
+    return live_catalog(q,db=db)
 
 @app.get('/api/live/status')
 def live_status(instrument_id:str=Query(IID,max_length=64),content:Literal['titles','body']='titles',db=Depends(get_db)):
@@ -113,7 +122,7 @@ def real_rankings(days:int=Query(3,ge=1,le=30),content:Literal['titles','body']=
 
 @app.get('/api/instruments')
 def instruments(q:str='', kind:Literal['all','market','index','stock','sector']='all', db=Depends(get_db)):
-    all_items = db.scalars(select(Instrument).order_by(Instrument.kind, Instrument.code)).all()
+    all_items = db.scalars(select(Instrument).where(Instrument.id.in_(demo_ids())).order_by(Instrument.kind, Instrument.code)).all()
     q = q.strip().lower()
     return [instrument_dict(i) for i in all_items if (kind=='all' or i.kind==kind) and (not q or q in f'{i.id} {i.code} {i.name} {" ".join(i.aliases)}'.lower())]
 
@@ -141,7 +150,7 @@ def run_backtest(instrument_id:str='CN:ALL', threshold:float=Query(60,ge=0,le=10
 @app.get('/api/signals')
 def signal_screen(db=Depends(get_db)):
     result=[]
-    for i in db.scalars(select(Instrument).where(Instrument.kind=='stock')):
+    for i in db.scalars(select(Instrument).where(Instrument.kind=='stock',Instrument.id.in_(demo_ids()))):
         a=analyze(db,i.id,10)
         for s in a['signals']:
             if s['tone']!='neutral': result.append({'instrument':instrument_dict(i),**s,'data_mode':'demo'})
@@ -189,7 +198,9 @@ def logout(user=Depends(current_user),creds=Depends(bearer),db=Depends(get_db)):
 
 @app.get('/api/watchlist')
 def watches(user=Depends(current_user),db=Depends(get_db)):
-    return [instrument_dict(ensure_instrument(db,w.instrument_id)) for w in db.scalars(select(WatchItem).where(WatchItem.user_id==user.id))]
+    available=set(db.scalars(demo_ids()))
+    return [{**instrument_dict(ensure_instrument(db,w.instrument_id)),'demo_available':w.instrument_id in available}
+            for w in db.scalars(select(WatchItem).where(WatchItem.user_id==user.id))]
 
 class WatchBody(BaseModel): instrument_id:str=Field(max_length=64)
 

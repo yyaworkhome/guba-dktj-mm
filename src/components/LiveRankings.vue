@@ -4,7 +4,7 @@ import { request } from '../api';
 type Row = {id: string; name: string; code: string; rank?: number; opinion_score: number | null;
   bullish_pct: number | null; bearish_pct: number | null; effective_posts: number; authors: number;
   directional_posts: number; last_observation: string | null; reasons: string[]};
-type Ranks = {ranked: Row[]; unranked: Row[]; scope: string; limitations: string[]; as_of: string};
+type Ranks = {ranked: Row[]; unranked: Row[]; scope: string; scope_size:number; limitations: string[]; as_of: string};
 const props = defineProps<{days: number; content: 'titles' | 'body'}>();
 const emit = defineEmits<{select: [id: string]}>();
 const data = ref<Ranks | null>(null), sort = ref('opinion_score'), busy = ref(false), error = ref('');
@@ -27,8 +27,8 @@ defineExpose({load});
 </script>
 <template>
   <section class="panel live-rankings">
-    <div class="panel-heading"><h2>真实样本观察榜 · 5股</h2><label>排序 <select v-model="sort" aria-label="真实榜单排序"><option v-for="(name,key) in names" :value="key" :key="key">{{ name }}</option></select></label></div>
-    <p class="subtle rank-note">近{{ days }}自然日 · {{ content === 'body' ? '正文' : '标题' }}口径 · 仅已开放5只股票。入榜需至少20条有效样本、10位作者、10条方向样本，且观察未超过24小时。</p>
+    <div class="panel-heading"><h2>真实样本观察榜<span v-if="data"> · {{data.scope_size}}股</span></h2><label>排序 <select v-model="sort" aria-label="真实榜单排序"><option v-for="(name,key) in names" :value="key" :key="key">{{ name }}</option></select></label></div>
+    <p class="subtle rank-note">近{{ days }}自然日 · {{ content === 'body' ? '正文' : '标题' }}口径 · 已采集股票与初始观察样本，不是全市场排行。入榜需至少20条有效样本、10位作者、10条方向样本，且观察未超过24小时。</p>
     <p v-if="busy" class="rank-note" role="status">正在读取真实样本榜…</p>
     <p v-else-if="error" class="rank-warning" role="alert">{{ error }} · 未使用演示排名替代。</p>
     <template v-else-if="data">

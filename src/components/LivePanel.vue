@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { RefreshCw, Database, ExternalLink } from 'lucide-vue-next';
-import { request } from '../api';
+import { request,download } from '../api';
 import LiveHistory from './LiveHistory.vue';
 import LiveRankings from './LiveRankings.vue';
+import StockSearch, {type SearchStock} from './StockSearch.vue';
+import CollectionControl from './CollectionControl.vue';
 
 interface LiveData {
   instrument_id: string; name: string; code: string; content: string; source_url: string; collector_command: string;
@@ -20,13 +22,17 @@ interface LiveData {
   limitations: string[];
 }
 interface LiveStock { id: string; name: string; code: string; exchange: string; }
-const props = defineProps<{initialInstrument?: string}>();
+const props = defineProps<{initialInstrument?: string;username:string}>();
+const emit=defineEmits<{login:[];select:[id:string]}>();
 const stocks = ref<LiveStock[]>([]), instrumentId = ref(props.initialInstrument || 'XSHE:300059'), stockQuery = ref('');
 const content = ref<'titles' | 'body'>('titles');
 const filteredStocks = computed(() => stocks.value.filter(s => `${s.id} ${s.code} ${s.name}`.toLowerCase().includes(stockQuery.value.trim().toLowerCase())));
 const selectedStock = computed(() => stocks.value.find(s => s.id === instrumentId.value));
 const scopeName = computed(() => content.value === 'body' ? '正文' : '标题');
 const data = ref<LiveData | null>(null), days = ref(3), busy = ref(false), error = ref('');
+const exporting=ref(false);
+const directionCount=computed(()=>data.value?data.value.counts.bullish+data.value.counts.bearish:0);
+const directionCoverage=computed(()=>data.value?.effective_posts?Math.round(directionCount.value/data.value.effective_posts*1000)/10:0);
 let version = 0;
 const names: Record<string, string> = { bullish: '看多', bearish: '看空', neutral: '中性 / 未识别' };
 const statusNames: Record<string, string> = { success: '采集成功', partial: '部分采集失败', failed: '采集失败', running: '采集中' };
@@ -34,7 +40,8 @@ const lastBar = computed(() => data.value?.quote?.bars.at(-1));
 const historyPanel = ref<InstanceType<typeof LiveHistory> | null>(null);
 const rankingPanel = ref<InstanceType<typeof LiveRankings> | null>(null);
 async function refresh() { await Promise.all([load(), historyPanel.value?.load(), rankingPanel.value?.load()]); }
-async function selectRanked(id: string) { instrumentId.value = id; stockQuery.value = ''; await load(); }
+async function exportReal(){const current=data.value;if(!current)return;exporting.value=true;try{await download(`/live/export?${new URLSearchParams({instrument_id:current.instrument_id,days:String(current.days),content:current.content})}`,`真实采样-${current.code}-${current.content}.xlsx`);}catch(e){error.value=e instanceof Error?e.message:'导出失败';}finally{exporting.value=false;}}
+async function selectRanked(id: string) { instrumentId.value = id;emit('select',id); stockQuery.value = ''; await load(); }
 function time(s: string | null | undefined) {
   return s ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(s)) : '尚未采集';
 }
@@ -56,7 +63,8 @@ onMounted(async () => {
   try { stocks.value = await request<LiveStock[]>('/live/instruments'); }
   catch (e) { error.value = e instanceof Error ? e.message : '证券目录读取失败'; }
 });
-async function chooseStock(stock: LiveStock) { instrumentId.value = stock.id; await load(); }
+async function chooseStock(stock: LiveStock) { instrumentId.value = stock.id;emit('select',stock.id); await load(); }
+async function searchedStock(stock:SearchStock){if(!stocks.value.some(s=>s.id===stock.id))stocks.value.push(stock);stockQuery.value='';await chooseStock(stock);}
 async function chooseContent(value: 'titles' | 'body') { content.value = value; await load(); }
 onUnmounted(() => { version++; });
 </script>
@@ -68,13 +76,14 @@ onUnmounted(() => { version++; });
         <div><p class="live-eyebrow"><Database :size="14" />真实采样 · 规则分类</p><h2>{{ selectedStock?.name || data?.name || '东方财富' }} <span class="subtle">{{ instrumentId }} · {{ scopeName }}口径</span></h2></div>
         <button class="secondary compact" :disabled="busy" @click="refresh()"><RefreshCw :size="14" :class="{ spin: busy }" />刷新已采集数据</button>
       </div>
-      <p class="subtle live-description">已开放5只股票，标题与正文分别统计，行情为未复权日线。大盘、板块栏目可查询妙想真实行情，其综合情绪聚合仍待接入。</p>
-      <label class="live-search-label" for="live-stock-search">输入个股代码或名称</label>
+      <p class="subtle live-description">支持按代码、名称或拼音查询沪深北A股，核验证券后采集其自身股吧。标题与正文分别统计，行情为未复权日线；没有样本时可在下方发起采集。</p>
+      <StockSearch @select="searchedStock" />
+      <label class="live-search-label" for="live-stock-search">筛选已保存证券</label>
       <input id="live-stock-search" v-model="stockQuery" class="live-search" placeholder="如 000001、平安银行、600519" />
       <div class="live-stock-options" role="group" aria-label="选择真实采样股票">
-        <button v-for="s in filteredStocks" :key="s.id" :class="['secondary', { selected: instrumentId === s.id }]" :aria-pressed="instrumentId === s.id" @click="chooseStock(s)">{{ s.name }} <small>{{ s.code }} · {{ s.exchange === 'XSHG' ? '上交所' : '深交所' }}</small></button>
+        <button v-for="s in filteredStocks" :key="s.id" :class="['secondary', { selected: instrumentId === s.id }]" :aria-pressed="instrumentId === s.id" @click="chooseStock(s)">{{ s.name }} <small>{{ s.code }} · {{ s.exchange === 'XSHG' ? '上交所' : s.exchange==='XBSE'?'北交所':'深交所' }}</small></button>
       </div>
-      <p v-if="!filteredStocks.length && stocks.length" class="subtle">未找到已开放股票。此入口只查询个股，000001对应深交所平安银行；上证指数行情可在妙想入口查询。</p>
+      <p v-if="!filteredStocks.length && stocks.length" class="subtle">本机尚未保存该证券，请使用上方全A股搜索。个股000001对应平安银行，上证指数使用大盘栏目。</p>
       <div class="period-options live-periods" role="group" aria-label="内容口径">
         <button :class="{selected: content === 'titles'}" :aria-pressed="content === 'titles'" @click="chooseContent('titles')">标题采样</button>
         <button :class="{selected: content === 'body'}" :aria-pressed="content === 'body'" @click="chooseContent('body')">正文采样 · 每批最多5条</button>
@@ -82,11 +91,12 @@ onUnmounted(() => { version++; });
       <div class="period-options live-periods" role="group" aria-label="真实样本自然日范围">
         <button v-for="n in [1, 3, 5, 10, 20]" :key="n" :class="{ selected: days === n }" :aria-pressed="days === n" @click="load(n)">{{ n === 1 ? '今日' : `近${n}自然日` }}</button>
       </div>
-      <p class="subtle">刷新只读取数据库；源站采集由本机采集命令运行，间隔至少10分钟。</p>
+      <CollectionControl :key="`${instrumentId}-${content}`" :instrument-id="instrumentId" :name="selectedStock?.name||data?.name||instrumentId" :content="content" :username="username" @login="emit('login')" @collected="refresh" />
     </section>
     <p v-if="busy" class="panel loading-state" role="status">正在读取真实采样记录…</p>
     <p v-if="error" class="error-banner" role="alert">{{ error }} · 未使用演示数据替代。</p>
     <template v-if="data">
+      <section class="panel live-summary"><div class="panel-heading"><h2>真实样本解读 · 规则统计</h2><button class="secondary" :disabled="exporting" @click="exportReal">{{exporting?'导出中…':'导出真实 Excel'}}</button></div><p>近{{data.days}}自然日已保存{{data.effective_posts}}条有效{{scopeName}}、{{data.authors}}位作者；明确方向{{directionCount}}条，占有效样本{{directionCoverage}}%。</p><p v-if="!directionCount">当前规则尚未识别出明确方向，无法给出有效舆论分。可查看源帖或补充正文采样；“未识别”不表示这些作者都持中立观点。</p><p v-else>方向样本中，看多{{data.counts.bullish}}条、看空{{data.counts.bearish}}条；舆论分{{data.opinion_score}}仅反映这部分已识别样本。方向覆盖低或样本不足时，不宜解读为整个股吧的一致预期。</p><p class="subtle">导出包含当前统计、最近5条有效样本来源、日线及已保存快照；真实数据留空值，不生成预测收益。</p></section>
       <section class="panel live-source">
         <div class="panel-heading"><h2>采集状态</h2><span class="live-badge">{{ data.status.latest_run ? statusNames[data.status.latest_run.status] : '尚无采集记录' }}</span></div>
         <p class="subtle">最近运行：{{ time(data.status.latest_run?.finished_at) }}（北京时间） · {{ scopeName }}最近观察：{{ time(data.last_post_observation) }}</p>
@@ -122,6 +132,7 @@ onUnmounted(() => { version++; });
 
 <style scoped>
 .live-search-label { display: block; font-size: 12px; color: var(--muted); margin: 16px 0 7px; }
+.live-summary p{margin-top:12px;line-height:1.9;font-size:13px}.live-summary .panel-heading{flex-wrap:wrap;gap:12px}
 .live-search { width: 100%; max-width: 430px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 11px; color: var(--text); }
 .live-stock-options { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .live-stock-options button { display: block; text-align: left; }

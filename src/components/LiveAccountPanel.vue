@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {ref, watch, onMounted, onUnmounted} from 'vue';
 import {request, post} from '../api';
+import StockSearch,{type SearchStock} from './StockSearch.vue';
 type Stock = {id:string; name:string; code:string};
 type Sample = {opinion_score:number|null;effective_posts:number;authors:number;stale:boolean;
   last_post_observation:string|null;percentages:Record<string,number|null>;reasons:string[]};
@@ -15,6 +16,7 @@ const busy=ref(false),saving=ref(false),error=ref(''),note=ref('');
 const names:Record<string,string>={bullish_pct:'看多占比',bearish_pct:'看空占比',opinion_score:'舆论分'};
 let version=0,disposed=false;
 const time=(s:string|null)=>s?new Date(s).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'尚无';
+function selectStock(s:SearchStock){if(!stocks.value.some(i=>i.id===s.id))stocks.value.push(s);selected.value=s.id;}
 async function load(){
   const current=++version;rules.value=[];items.value=[];error.value='';
   if(!props.username){busy.value=false;return;}
@@ -57,7 +59,8 @@ onUnmounted(()=>{disposed=true;++version;});
 <template>
   <section class="panel real-account">
     <div class="panel-heading"><h2>{{view==='alerts'?'真实采样预警':'真实自选对比'}}</h2><button class="secondary" :disabled="busy||saving" @click="load">刷新状态</button></div>
-    <p class="subtle section-note">{{view==='alerts'?'按当前保存的标题或正文样本判断阈值。有效样本≥20、作者≥10、方向样本≥10且观察未超过24小时才判断触发；不足时显示待积累。':'同一账号自选共享。当前仅5股支持真实帖子采样；其他对象列出未支持，不借用模拟分数。'}} 不请求源站，不发送后台通知。</p>
+    <p class="subtle section-note">{{view==='alerts'?'按当前保存的标题或正文样本判断阈值。有效样本≥20、作者≥10、方向样本≥10且观察未超过24小时才判断触发；不足时显示待积累。':'同一账号自选共享。可搜索任意沪深北A股加入；无样本时进入个股页采集。不支持的对象列出原因，不借用模拟分数。'}} 状态刷新只读取已保存样本，不发送后台通知。</p>
+    <StockSearch v-if="username" @select="selectStock" />
     <p v-if="!username" class="empty-note">登录本系统账号后保存和查询。<button class="text-button" @click="emit('login')">登录 / 注册</button></p>
     <form v-else class="real-controls" @submit.prevent="save">
       <label>股票<select v-model="selected" required aria-label="真实账号股票"><option v-for="s in stocks" :key="s.id" :value="s.id">{{s.name}} {{s.code}}</option></select></label>
