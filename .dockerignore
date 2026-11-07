@@ -1,0 +1,10 @@
+node_modules
+.git
+.venv
+dist
+android
+src-tauri/target
+.env*
+backend/data
+__pycache__
+.pytest_cache

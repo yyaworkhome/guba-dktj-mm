@@ -1,0 +1,9 @@
+# Replace the domain, then run Caddy in front of the localhost app.
+sentiment.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8000
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+    }
+}

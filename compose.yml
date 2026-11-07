@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: sentiment
+      POSTGRES_USER: sentiment
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentiment"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://sentiment:${POSTGRES_PASSWORD}@postgres:5432/sentiment
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set HTTPS app origin and native origins}
+      SEED_DEMO: ${SEED_DEMO:-true}
+      MX_APIKEY: ${MX_APIKEY:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  database:
