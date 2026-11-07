@@ -133,6 +133,18 @@ def test_auth_failure_backoff_and_daily_limit(db,ai_config,monkeypatch):
     with pytest.raises(ValueError,match='上限'):analyze_probe(db,None,row)
 
 
+def test_rules_remain_available_without_key_when_ai_budget_is_exhausted(db,ai_config,monkeypatch):
+    monkeypatch.setenv('SENTIMENT_AI_API_KEY','')
+    monkeypatch.setenv('SENTIMENT_AI_DAILY_CALL_LIMIT','0')
+    before=configuration(db)
+    assert before['quota_exhausted'] and not before['configured']
+    row=observation(db)
+    result,reused=analyze_probe(db,None,row,mode='rules')
+    assert result.status=='success' and not reused
+    assert result.model=='community-rules-v2' and '非AI' in result.result['method']
+    assert configuration(db)['calls_today']==before['calls_today']==0
+
+
 def test_quality_excludes_duplicate_ad_flood_and_low_confidence(db,ai_config):
     row=observation(db,6)
     rows=row.samples

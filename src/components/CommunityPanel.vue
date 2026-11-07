@@ -6,7 +6,7 @@ export type CommunityAnalysis={id:number;model:string;prompt_version:string;stat
 type Probe={id:number;status:string;sample_count:number;author_count:number;verified_publication_count:number;observed_at:string;details:{note?:string;error?:string};samples:{id:string;text:string;source_time:string;url:string}[]};
 type Source={source:string;name:string;url:string;latest:Probe|null;attempts:number;reachable_rate:number|null;sample_success_rate:number|null;attempted_stocks:number;covered_stocks:number;sample_observations:number;analysis:CommunityAnalysis|null;last_success:CommunityAnalysis|null};
 type Status={sources:Source[];universe_size:number|null;method:string};
-type AI={configured:boolean;model?:string;calls_today?:number;daily_call_limit?:number;error:string;cooldown?:boolean};
+type AI={configured:boolean;model?:string;calls_today?:number;daily_call_limit?:number;error:string;cooldown?:boolean;quota_exhausted?:boolean};
 const props=defineProps<{instrumentId:string;disabled?:boolean}>();
 const emit=defineEmits<{results:[items:{source:string;analysis:CommunityAnalysis|null}[]]}>();
 const data=ref<Status|null>(null),ai=ref<AI|null>(null),error=ref(''),busy=ref('');let disposed=false;
@@ -18,12 +18,14 @@ async function load(){const [sources,config]=await Promise.all([request<Status>(
 async function perform(source:string,task:()=>Promise<unknown>){if(busy.value)return;busy.value=source;error.value='';try{await task();}catch(e){if(!disposed)error.value=e instanceof Error?e.message:'来源处理失败';}finally{if(!disposed){busy.value='';await load().catch(()=>{});}}}
 async function probe(source:string){await perform(source,()=>request('/live/community/probe',{method:'POST',body:JSON.stringify({source,instrument_id:props.instrumentId})},45000));}
 async function classify(source:Source,mode:'ai'|'rules'){await perform(source.source,()=>request('/live/community/analyze',{method:'POST',body:JSON.stringify({probe_id:source.latest?.id,mode})},90000));}
-async function run(source:string){await perform(source,async()=>{
-  const config=await request<AI>('/live/community/ai');ai.value=config;
-  if(!config.configured||config.cooldown)throw new Error(config.error||'模型尚未配置');
+async function run(source:string,mode:'ai'|'rules'='ai'){await perform(source,async()=>{
+  if(mode==='ai'){
+    const config=await request<AI>('/live/community/ai');ai.value=config;
+    if(!config.configured||config.cooldown||config.quota_exhausted)throw new Error(config.error||'模型尚未配置');
+  }
   const observation=await request<{observation:Probe}>('/live/community/probe',{method:'POST',body:JSON.stringify({source,instrument_id:props.instrumentId})},45000);
   if(observation.observation.status!=='samples')throw new Error(observation.observation.details.error||observation.observation.details.note||'该来源未取得可读帖子');
-  const result=await request<{analysis:CommunityAnalysis}>('/live/community/analyze',{method:'POST',body:JSON.stringify({probe_id:observation.observation.id,mode:'ai'})},90000);
+  const result=await request<{analysis:CommunityAnalysis}>('/live/community/analyze',{method:'POST',body:JSON.stringify({probe_id:observation.observation.id,mode})},90000);
   if(result.analysis.status!=='success')throw new Error(result.analysis.result.error||names[result.analysis.status]||'模型分类失败');
 });if(error.value)throw new Error(error.value);}
 defineExpose({run});
@@ -42,7 +44,7 @@ onMounted(()=>load().catch(e=>error.value=e.message));onUnmounted(()=>{disposed=
         <p class="source-state">{{source.latest?names[source.latest.status]:'尚未验证'}}</p>
         <dl class="source-metrics"><div><dt>可达率 / 样本成功率</dt><dd>{{rate(source.reachable_rate)}} / {{rate(source.sample_success_rate)}}</dd></div><div><dt>请求 / 覆盖股票</dt><dd>{{source.attempts}} 次 / {{source.covered_stocks}} 只</dd></div><div><dt>本次可读帖子 / 作者</dt><dd>{{source.latest?.sample_count??0}} / {{source.latest?.author_count??0}}</dd></div><div><dt>已核验完整发布时间</dt><dd>{{source.latest?.verified_publication_count??0}} 条</dd></div></dl>
         <p v-if="source.latest?.details.error" class="subtle">{{source.latest.details.error}}</p>
-        <div class="source-actions"><button class="secondary" :disabled="!!busy||disabled" @click="probe(source.source)">验证与采集</button><button v-if="source.latest?.sample_count" class="primary" :disabled="!!busy||disabled||!ai?.configured||ai?.cooldown" @click="classify(source,'ai')">AI 情绪分析</button></div>
+        <div class="source-actions"><button class="secondary" :disabled="!!busy||disabled" @click="probe(source.source)">验证与采集</button><button v-if="source.latest?.sample_count" class="primary" :disabled="!!busy||disabled||!ai?.configured||ai?.cooldown||ai?.quota_exhausted" @click="classify(source,'ai')">AI 情绪分析</button></div>
         <p v-if="source.analysis&&source.analysis.status!=='success'" class="source-failure">最近分类：{{names[source.analysis.status]||source.analysis.status}}。已保存的成功结果保留。</p>
         <template v-if="source.last_success">
           <div class="sentiment-result"><strong>{{source.last_success.result.opinion_score??'—'}}<small> / 100 舆论分</small></strong><span>{{source.last_success.model}} · {{source.last_success.prompt_version}}</span></div>

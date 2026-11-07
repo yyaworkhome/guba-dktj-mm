@@ -49,9 +49,10 @@ def configuration(db):
         CommunityAnalysis.status.in_(['auth_failed','balance_failed','rate_limited']),
         CommunityAnalysis.created_at>now-timedelta(minutes=10)).order_by(CommunityAnalysis.id.desc()))
     return {'configured':bool(cfg['key']),'model':cfg['model'],'base_url':cfg['base'],
-        'daily_call_limit':cfg['limit'],'calls_today':used,'cooldown':bool(barrier),
+        'daily_call_limit':cfg['limit'],'calls_today':used,'cooldown':bool(barrier),'quota_exhausted':used>=cfg['limit'],
         'error':('请在项目根目录 .env.local 填写 SENTIMENT_AI_API_KEY' if not cfg['key'] else
-                 '模型服务拒绝请求，暂停调用10分钟；请检查密钥、余额或额度' if barrier else '')}
+                 '模型服务拒绝请求，暂停调用10分钟；请检查密钥、余额或额度' if barrier else
+                 '今日AI调用限额已用完；可读取已保存结果，或明确选择关键词规则（非AI）' if used>=cfg['limit'] else '')}
 
 
 class Prediction(BaseModel):
