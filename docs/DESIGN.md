@@ -1,3 +1,5 @@
+> 历史设计记录：当前页面以 [DESIGN_REFRESH.md](DESIGN_REFRESH.md) 为准。
+
 # 界面实现依据
 
 最终方向：专业金融暗色工作台；Vue 3响应式界面，桌面固定侧栏，手机折叠导航。概念见 `design/concept.png`，由内置Image Gen生成，非运行时页面背景。

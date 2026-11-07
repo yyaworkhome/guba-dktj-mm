@@ -93,6 +93,15 @@ def test_partial_and_total_failure_preserve_status_without_demo_fill(db):
     assert live_analysis(db,3)['effective_posts'] == 1 # old observations retained, failure visible
     assert live_analysis(db,3)['status']['latest_run']['status'] == 'failed'
 
+
+def test_identity_challenge_is_recorded_as_access_requirement_not_parse_failure(db):
+    page='<html><head><title>身份核实</title></head><body><script src="captcha.js"></script></body></html>'
+    result=collect(db,client_for(page))
+    posts=result['details']['posts']
+    assert posts['status']=='failed' and posts['error_code']=='access_required'
+    assert '验证码' in posts['error']
+    assert live_analysis(db,3)['effective_posts']==0
+
 def test_author_cap_and_empty_analysis(db):
     assert live_analysis(db)['effective_posts'] == 0
     assert live_analysis(db)['opinion_score'] is None

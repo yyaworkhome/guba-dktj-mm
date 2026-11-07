@@ -24,6 +24,8 @@ def live_catalog(q='',db=None):
         for iid,(code,name,_) in STOCKS.items()}
     if db is not None:
         for i in db.scalars(select(Instrument).where(Instrument.kind=='stock')):
+            try: stock(i.id)
+            except ValueError: continue
             meta=(i.scope or {}).get('live_directory')
             if meta:
                 rows[i.id]={'id':i.id,'code':i.code,'name':meta['name'],'exchange':i.exchange,'kind':'stock'}

@@ -44,7 +44,7 @@ onUnmounted(() => { disposed = true; ++version; clearInterval(timer); });
 <template>
   <section class="collection-control" aria-label="开始真实分析">
     <div class="analysis-action">
-      <div><h3>分析 {{name}} · {{content==='titles'?'标题':'正文'}} · 近{{days}}自然日</h3><p>读取股吧 → 去重与规则分类 → 保存快照 → 展示结果。本机分析无需登录；自选和预警需登录保存。</p></div>
+      <div><h3>分析 {{name}} · {{content==='titles'?'标题':'正文'}} · 近{{days}}自然日</h3><p>读取股吧 → 去重与规则分类 → 保存快照 → 展示结果。本机分析无需登录。</p></div>
       <button class="primary" :disabled="busy" @click="analyze"><RefreshCw v-if="busy" :size="16" class="spin" />{{busy?'正在采集并分析…':'开始真实分析'}}<ArrowRight v-if="!busy" :size="16" /></button>
     </div>
     <p v-if="busy" role="status">正在处理 {{name}}。标题通常数秒，正文最多请求5条详情；请等待结果，重复点击不会加速。</p>

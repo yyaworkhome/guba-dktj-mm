@@ -79,7 +79,7 @@ onUnmounted(() => { disposed = true; ++version; });
     <section class="panel">
       <div class="panel-heading"><h2>{{context === 'index' ? '大盘指数 · 真实行情查询' : context === 'sector' ? '板块 · 真实条件筛选' : '妙想数据查询'}}</h2><span class="subtle">{{ status ? (status.configured ? '数据服务已配置' : '数据服务未配置') : '检查服务中…' }}</span></div>
       <p class="subtle mx-intro">查询个股、指数行情和板块成分，保留每次获取时间与接口解析条件。</p>
-      <p v-if="context" class="subtle mx-note">此栏目提供真实行情{{context === 'sector'?'与条件筛选':''}}；指数/板块的真实综合情绪聚合尚未接入。可切换“模拟演示”体验情绪分析流程。</p>
+      <p v-if="context" class="subtle mx-note">此栏目提供真实行情{{context === 'sector'?'与条件筛选':''}}；指数/板块的真实综合情绪聚合尚未接入。个股股吧情绪请使用“个股分析”。</p>
       <form @submit.prevent="run">
         <div class="mode-tabs" role="group" aria-label="妙想查询类型">
           <button v-for="(label, key) in names" :key="key" type="button" :class="{selected: kind === key}" :aria-pressed="kind === key" :disabled="busy" @click="kind = key">{{ label }}</button>

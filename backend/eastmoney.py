@@ -49,7 +49,11 @@ def detail_url(iid, pid):
     return f'https://guba.eastmoney.com/news,{stock(iid)[0]},{pid}.html'
 
 class SourceError(ValueError):
-    pass
+    code = 'source_format'
+
+
+class SourceAccessRequired(SourceError):
+    code = 'access_required'
 
 class SourceExcluded(SourceError):
     """Valid detail response, excluded by the sample policy rather than failed."""
@@ -90,13 +94,19 @@ def get_document(client, url):
             except ValueError: pass
     if not allowed: raise SourceError('不支持的数据地址')
     with client.stream('GET', url, follow_redirects=False, timeout=15) as response:
+        if response.status_code in (401,403,429):
+            raise SourceAccessRequired(f'源站返回HTTP {response.status_code}，需要核验访问权限或限流；已停止请求。')
         if response.status_code != 200:
             raise SourceError(f'数据源返回 HTTP {response.status_code}；未重试或绕过访问限制')
         content = bytearray()
         for chunk in response.iter_bytes():
             content.extend(chunk)
             if len(content) > 2_000_000: raise SourceError('源响应超出大小限制')
-    try: return content.decode('utf-8')
+    try:
+        document=content.decode('utf-8')
+        if re.search(r'<title[^>]*>\s*(?:身份核实|安全验证|访问验证|人机验证|访问受限|Access Denied|Just a moment\.*)\s*</title>',document,re.I):
+            raise SourceAccessRequired('源站要求身份核实或验证码，已停止采样；不会自动处理验证码或绕过限制。')
+        return document
     except UnicodeDecodeError as exc: raise SourceError('源响应编码不受支持') from exc
 
 def nonnegative(value):

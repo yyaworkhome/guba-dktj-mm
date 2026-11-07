@@ -51,7 +51,7 @@ def collect_bodies(client, candidates, iid, limit):
     return posts, {'requested': len(chosen), 'documents': documents, 'errors': errors, 'detail_excluded': excluded,
         'not_attempted': len(chosen)-len(posts)-len(errors)-len(excluded)}
 
-def collect(db, client, iid=IID, content='titles', limit=3):
+def collect(db, client, iid=IID, content='titles', limit=3, *, fetch_quotes=True):
     code, name, _ = stock(iid)
     if content not in ('titles', 'body') or not 1 <= limit <= 5: raise ValueError('采集类型或正文数量无效（1～5条）')
     source = SOURCE if content == 'titles' else BODY_SOURCE
@@ -64,6 +64,9 @@ def collect(db, client, iid=IID, content='titles', limit=3):
     db.add(run); db.commit()
     details = {'_meta': {'source': source, 'content': content}}
     for name, url, parser in [('posts', list_url(iid), parse_titles), ('quotes', kline_url(iid), parse_bars)]:
+        if name == 'quotes' and not fetch_quotes:
+            details[name] = {'status':'skipped','reason':'全市场扫描仅采集帖子，不重复请求日线'}
+            continue
         try:
             document = get_document(client, url)
             observed = datetime.now(timezone.utc)
@@ -96,7 +99,8 @@ def collect(db, client, iid=IID, content='titles', limit=3):
         except (httpx.HTTPError, SourceError) as exc:
             # Store only a controlled diagnostic, never response bodies/tokens.
             error = str(exc) if isinstance(exc, SourceError) else f'网络错误：{type(exc).__name__}'
-            details[name] = {'status': 'failed', 'url': url, 'error': error}
+            details[name] = {'status': 'failed', 'url': url, 'error': error,
+                             'error_code':exc.code if isinstance(exc,SourceError) else 'network'}
         except Exception:
             # Do not commit a partial database write or leave the run "running".
             db.rollback()
@@ -107,7 +111,7 @@ def collect(db, client, iid=IID, content='titles', limit=3):
             db.commit()
             raise
     states = [details[key]['status'] for key in ('posts', 'quotes')]
-    run.status = 'success' if all(s == 'ok' for s in states) else 'partial' if any(s in ('ok', 'partial') for s in states) else 'failed'
+    run.status = 'success' if all(s in ('ok','skipped') for s in states) else 'partial' if any(s in ('ok', 'partial') for s in states) else 'failed'
     run.details = details
     run.finished_at = datetime.now(timezone.utc)
     if details['posts']['status'] in ('ok', 'partial'):

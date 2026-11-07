@@ -1,0 +1,66 @@
+<script setup lang="ts">
+import {ref,computed,onMounted,onUnmounted} from 'vue';
+import {request,post,download} from '../api';
+type Job={id:number;status:string;total:number;processed:number;counts:Record<string,number>;created_at:string;error:string};
+type Status={enabled:boolean;worker_ready:boolean;universe:{total:number;observed_at:string}|null;directory_error:string;schedule:{enabled:boolean;hour:number;minute:number};job:Job|null;history:{id:number;created_at:string;status:string}[]};
+type Row={id:string;code:string;name:string;opinion_score:number;effective_posts:number;counts:Record<string,number>;error?:string;reasons?:string[];status?:string};
+type Ranking={job:Job|null;bullish:Row[];bearish:Row[];method:string;scope:string};
+const props=defineProps<{mode:'controls'|'rankings'|'full'}>();
+const emit=defineEmits<{select:[id:string]}>();
+const status=ref<Status|null>(null),ranks=ref<Ranking|null>(null),error=ref(''),busy=ref(false),action=ref(''),scanId=ref(''),details=ref<Row[]>([]),showDetails=ref(false),offset=ref(0);
+let timer:ReturnType<typeof setInterval>,disposed=false,polling=false,lastKey='';
+const names:Record<string,string>={queued:'等待扫描',running:'扫描中',paused:'已暂停',completed:'扫描完成',cancelled:'已停止',eligible:'已入榜',insufficient:'样本不足',failed:'采集失败'};
+const active=computed(()=>status.value?.job&&['queued','running','paused'].includes(status.value.job.status));
+const scheduleTime=computed(()=>`${String(status.value?.schedule.hour??16).padStart(2,'0')}:${String(status.value?.schedule.minute??10).padStart(2,'0')}`);
+const sourceIssue=computed(()=>status.value?.job?.error||status.value?.directory_error||'');
+const pct=computed(()=>status.value?.job?Math.round(status.value.job.processed/status.value.job.total*1000)/10:0);
+const time=(s:string)=>new Date(s).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
+async function load(force=false){if(polling)return;polling=true;try{const result=await request<Status>('/live/market/status');if(disposed)return;status.value=result;const key=`${scanId.value}-${result.job?.id}-${result.job?.processed}-${result.job?.status}`;if(props.mode!=='controls'&&(force||key!==lastKey)){lastKey=key;await loadRanks();}}catch(e){if(!disposed)error.value=e instanceof Error?e.message:'扫描状态读取失败';}finally{polling=false;}}
+async function loadRanks(){const result=await request<Ranking>(`/live/market/rankings${scanId.value?'?scan_id='+scanId.value:''}`);if(!disposed)ranks.value=result;}
+async function perform(label:string,fn:()=>Promise<unknown>){if(busy.value)return;busy.value=true;action.value=label;error.value='';try{await fn();await load(true);}catch(e){error.value=e instanceof Error?e.message:'操作失败';}finally{busy.value=false;action.value='';}}
+async function sync(){return request('/live/market/directory',{method:'POST'},180000);}
+function start(){perform('准备扫描…',async()=>{if(!status.value?.universe){action.value='同步完整股票目录…';await sync();}action.value='创建全市场任务…';await post('/live/market/start',{});});}
+function control(action:string){perform('更新扫描…',()=>post('/live/market/control',{action}));}
+function toggleSchedule(){perform('保存每日计划…',()=>post('/live/market/schedule',{enabled:!status.value?.schedule.enabled,hour:16,minute:10},'PUT'));}
+async function loadDetails(next=0){offset.value=next;await perform('读取采样明细…',async()=>{const result=await request<{items:Row[]}>(`/live/market/items?${new URLSearchParams({offset:String(next),...(scanId.value?{scan_id:scanId.value}:{})})}`);details.value=result.items;showDetails.value=true;});}
+onMounted(()=>{load();timer=setInterval(()=>load(),5000);});
+onUnmounted(()=>{disposed=true;clearInterval(timer);});
+</script>
+
+<template>
+  <div :class="['market-scan',mode]">
+    <section v-if="mode!=='rankings'" class="panel scan-command" aria-label="每日全市场扫描">
+      <h2>每日全市场扫描</h2>
+      <dl><div><dt>状态</dt><dd :class="{accent:active}">{{status?.job?names[status.job.status]:'未扫描'}}</dd></div><div><dt>股票目录</dt><dd>{{status?.universe?`${status.universe.total.toLocaleString()} 只A股`:'未同步'}}</dd></div><div><dt>每日时间</dt><dd>每日 {{scheduleTime}}</dd></div></dl>
+      <template v-if="status?.job"><div class="scan-progress" role="progressbar" :aria-valuenow="status.job.processed" :aria-valuemax="status.job.total" :aria-valuemin="0" aria-label="全市场扫描进度"><i :style="{width:pct+'%'}"/></div><p class="subtle">{{status.job.processed}} / {{status.job.total}} · 达标 {{status.job.counts.eligible||0}} · 不足 {{status.job.counts.insufficient||0}} · 失败 {{status.job.counts.failed||0}}</p></template>
+      <p v-else class="scan-note">扫描覆盖与失败数量逐项记录</p>
+      <details v-if="sourceIssue" class="scan-error"><summary>{{/身份核实|验证码|验证或限制/.test(sourceIssue)?'源站要求验证 · 查看说明':'采集或目录异常 · 查看原因'}}</summary><p>{{sourceIssue}}</p></details>
+      <button v-if="!active" class="primary scan-primary" :disabled="busy||!status?.enabled" @click="start">{{busy?action:'开始全市场扫描'}}</button>
+      <div v-else class="scan-actions"><button class="primary" :disabled="busy" @click="control(status?.job?.status==='paused'?'resume':'pause')">{{status?.job?.status==='paused'?'继续扫描':'暂停扫描'}}</button><button class="secondary" :disabled="busy" @click="control('cancel')">停止本次</button></div>
+      <div class="scan-utilities"><label><input type="checkbox" :checked="status?.schedule.enabled" :disabled="busy||!status?.enabled" @change="toggleSchedule"/>每日自动扫描</label><button class="text-button" :disabled="busy||!status?.enabled" @click="perform('同步目录…',sync)">{{busy?action:'同步目录'}}</button></div>
+      <button v-if="status?.job?.counts.failed" class="text-button" :disabled="busy||!status?.enabled" @click="control('retry_failed')">重试失败股票（{{status.job.counts.failed}}）</button>
+      <p v-if="!status?.enabled" class="subtle">此服务未开启本机扫描，请使用标准启动脚本。</p>
+      <details class="scan-help"><summary>运行说明</summary><p>每只股票间隔至少5秒，以5500只计算，仅间隔就约8小时，还需加上网络耗时。每天北京时间16:10执行；电脑及后端服务须保持运行，休市日也采样。单股解析失败会记录并跳过；身份核实、验证码或明确拒绝访问会停止请求，量化后台无法代替股吧访问权限。服务重启保留进度。</p></details>
+    </section>
+    <div v-if="mode!=='controls'" class="ranking-area">
+      <div v-if="mode==='full'||status?.history.length" class="rank-toolbar"><label>扫描批次<select v-model="scanId" @change="load(true)"><option value="">最新批次</option><option v-for="job in status?.history" :key="job.id" :value="String(job.id)">#{{job.id}} · {{time(job.created_at)}} · {{names[job.status]}}</option></select></label><button v-if="ranks?.job" class="secondary" :disabled="busy" @click="perform('导出中…',()=>download(`/live/market/export${scanId?'?scan_id='+scanId:''}`,`全市场多空排名-${ranks?.job?.id}.csv`))">导出 CSV</button></div>
+      <p v-if="ranks?.job" class="ranking-coverage">{{ranks.job.status==='completed'?'本批扫描完成':'本批部分排名'}} · 已处理 {{ranks.job.processed}} / {{ranks.job.total}} · 观察窗口近3自然日</p>
+      <div class="ranking-pair">
+        <section v-for="side in ['bullish','bearish'] as const" :key="side" :class="['panel', 'market-ranking',side]">
+          <h2>{{side==='bullish'?'看多排名':'看空排名'}}</h2>
+          <div class="table-scroll"><table><thead><tr><th>股票</th><th>舆论分</th><th>样本</th></tr></thead><tbody><tr v-for="row in ranks?.[side]||[]" :key="row.id"><td><button class="rank-stock" @click="emit('select',row.id)">{{row.name}}<small>{{row.code}}</small></button></td><td :class="side==='bullish'?'bull':'bear'">{{row.opinion_score.toFixed(1)}}</td><td>{{row.effective_posts}}</td></tr></tbody></table></div>
+          <p v-if="!ranks?.[side]?.length" class="rank-empty">尚无达标排名</p>
+        </section>
+      </div>
+      <p class="subtle rank-method">{{ranks?.method||'仅收录满足样本与作者门槛的真实统计结果。'}} {{ranks?.scope}}</p>
+      <button v-if="ranks?.job" class="text-button" :disabled="busy" @click="loadDetails()">查看采样明细与未入榜原因</button>
+      <section v-if="showDetails" class="panel scan-details"><h2>采样明细</h2><div v-for="row in details" :key="row.id" class="scan-detail"><button @click="emit('select',row.id)">{{row.name||row.id}}</button><span>{{names[row.status||'']}}</span><p class="subtle">{{row.error||row.reasons?.join('；')||'满足入榜门槛'}}</p></div><div class="scan-actions"><button class="secondary" :disabled="busy||!offset" @click="loadDetails(Math.max(0,offset-30))">上一页</button><button class="secondary" :disabled="busy||details.length<30" @click="loadDetails(offset+30)">下一页</button></div></section>
+    </div>
+    <p v-if="error" class="error-banner" role="alert">{{error}}</p>
+  </div>
+</template>
+
+<style scoped>
+.market-scan{min-width:0}.scan-command{height:100%;padding:28px}.scan-command h2{font-size:24px}.scan-command dl{margin:24px 0}.scan-command dl>div{display:flex;justify-content:space-between;gap:16px;margin:16px 0}.scan-command dt{color:var(--muted)}.scan-command dd{margin:0;font-weight:600}.accent{color:var(--accent)}.scan-note{border-top:1px solid var(--border);padding-top:18px;color:var(--muted);margin-bottom:18px}.scan-primary{width:100%;min-height:48px}.scan-actions{display:flex;gap:10px;margin-top:14px}.scan-actions button{flex:1}.scan-utilities{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:18px;font-size:12px}.scan-utilities label{display:flex;align-items:center;gap:7px}.scan-utilities input{accent-color:var(--accent)}.scan-help{font-size:12px;color:var(--muted);margin-top:12px;line-height:1.9}.scan-help summary{cursor:pointer}.scan-help p{margin-top:8px}.scan-progress{height:5px;background:var(--surface-alt);margin:16px 0 10px;overflow:hidden}.scan-progress i{display:block;height:100%;background:var(--accent);transition:width .3s}.scan-error{font-size:12px;color:var(--bull);margin:12px 0;line-height:1.8}.scan-error summary{cursor:pointer}.scan-error p{margin-top:8px}.ranking-pair{display:grid;grid-template-columns:1fr 1fr;gap:24px}.market-ranking{padding:24px;min-height:260px}.market-ranking h2{font-size:22px;display:flex;align-items:center;gap:14px;margin-bottom:18px}.market-ranking h2:before{content:'';display:block;width:5px;height:26px;background:var(--bull);border-radius:2px}.market-ranking.bearish h2:before{background:var(--bear)}.market-ranking table{width:100%;border-collapse:collapse}.market-ranking th{background:var(--surface-alt);text-align:left;color:var(--muted);font-weight:500}.market-ranking th,.market-ranking td{padding:12px}.market-ranking td{border-bottom:1px solid var(--border)}.rank-stock{text-align:left;font-weight:600;padding:0}.rank-stock:hover{color:var(--accent)}.rank-stock small{display:block;color:var(--muted);font-weight:400;margin-top:4px}.rank-empty{padding:55px 8px;text-align:center;color:var(--muted)}.rank-method{line-height:1.9;margin-top:16px}.rank-toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}.rank-toolbar label{display:flex;align-items:center;gap:10px;font-size:12px;min-width:0;white-space:nowrap}.rank-toolbar select{max-width:360px;width:clamp(160px,25vw,360px);min-width:0}.ranking-coverage{color:var(--muted);font-size:12px;margin-bottom:14px}.full{display:grid;grid-template-columns:350px minmax(0,1fr);gap:24px;align-items:start}.full .ranking-pair{gap:18px}.scan-details{margin-top:16px}.scan-detail{display:grid;grid-template-columns:1fr auto;gap:8px;padding:14px 0;border-bottom:1px solid var(--border);font-size:13px}.scan-detail button{text-align:left;padding:0}.scan-detail p{grid-column:1/-1}.scan-detail span{color:var(--muted)}
+@media(max-width:1100px){.full{grid-template-columns:1fr}.full .scan-command{height:auto}.scan-command{padding:24px}}@media(max-width:700px){.ranking-pair{grid-template-columns:1fr;gap:16px}.rank-toolbar{align-items:stretch;flex-direction:column}.rank-toolbar label{flex-wrap:wrap}.rank-toolbar select{max-width:none;width:100%}.market-ranking{padding:20px}.scan-command h2{font-size:22px}}
+</style>

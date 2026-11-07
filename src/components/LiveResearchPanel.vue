@@ -1,29 +1,15 @@
 <script setup lang="ts">
-import {ref,onMounted,onUnmounted} from 'vue';
-import {request} from '../api';
-import LiveRankings from './LiveRankings.vue';
+import {ref} from 'vue';
 import LiveHistory from './LiveHistory.vue';
-import LiveSignalScreen from './LiveSignalScreen.vue';
 import StockSearch,{type SearchStock} from './StockSearch.vue';
-const props=defineProps<{view:'rankings'|'signals'|'backtest'}>();
-const emit=defineEmits<{select:[id:string]}>();
-const days=ref(3),content=ref<'titles'|'body'>('titles'),iid=ref('XSHE:300059');
-const stocks=ref<{id:string;name:string}[]>([]),error=ref('');
-let disposed=false;
-function selectStock(s:SearchStock){if(!stocks.value.some(i=>i.id===s.id))stocks.value.push(s);iid.value=s.id;}
-onMounted(async()=>{try{const rows=await request<{id:string;name:string}[]>('/live/instruments');if(!disposed)stocks.value=rows;}catch(e){if(!disposed)error.value=e instanceof Error?e.message:'读取失败';}});
-onUnmounted(()=>{disposed=true;});
+const props=defineProps<{view:'backtest';initialInstrument?:string}>();
+defineEmits<{select:[id:string]}>();
+const iid=ref(props.initialInstrument||'XSHE:300059'),name=ref(''),content=ref<'titles'|'body'>('titles');
+function choose(s:SearchStock){iid.value=s.id;name.value=s.name;}
 </script>
 <template>
-  <section class="panel real-research">
-    <h2>{{view==='rankings'?'真实样本排行':view==='signals'?'真实样本异动研究':'真实回测 · 数据准备'}}</h2>
-    <p class="subtle section-note">{{view==='signals'?'先检查方向样本与作者覆盖，再筛选方向集中的股票。AI选股、跨日反转和价格背离尚未启用，不将高舆论分标记为买入机会。':view==='backtest'?'当前可以查询采集时点快照，核对真实信号是否已留痕。完整交易日历、复权价格与未来可成交价格尚未齐备，暂不输出真实收益或胜率。可切换模拟演示验证1/3/5/10日回测操作。':'标题与正文分别统计，已采集股票样本榜与演示排行榜隔离。样本不足时保留覆盖原因。'}}</p>
-    <StockSearch v-if="view==='backtest'" @select="selectStock" />
-    <div class="real-research-controls"><label>内容口径<select v-model="content" aria-label="研究内容口径"><option value="titles">标题采样</option><option value="body">正文采样</option></select></label><label v-if="view!=='backtest'">自然日窗口<select v-model="days" aria-label="研究自然日窗口"><option v-for="n in [1,3,5,10,20]" :key="n" :value="n">近{{n}}自然日</option></select></label><label v-else>股票<select v-model="iid" aria-label="历史研究股票"><option v-for="s in stocks" :key="s.id" :value="s.id">{{s.name}}</option></select></label></div>
-    <p v-if="error" role="alert" class="error-banner">{{error}}</p>
-  </section>
-  <LiveSignalScreen v-if="view==='signals'" :days="days" :content="content" @select="emit('select',$event)" />
-  <LiveHistory v-if="view==='backtest'" :instrument-id="iid" :content="content" />
-  <LiveRankings v-else :days="days" :content="content" @select="emit('select',$event)" />
+  <section class="panel history-search"><h1>历史数据</h1><p class="subtle">按实际采集时间保存的情绪快照</p><StockSearch @select="choose"/><div class="history-controls"><span>{{name||iid}}</span><label>内容口径<select v-model="content"><option value="titles">标题采样</option><option value="body">正文采样</option></select></label></div></section>
+  <LiveHistory :instrument-id="iid" :content="content"/>
+  <p class="subtle history-note">真实收益回测需要连续历史信号、交易日历和复权价格。目前仅展示已保存快照，不输出未经验证的胜率。</p>
 </template>
-<style scoped>.real-research{margin-bottom:16px}.section-note{line-height:1.9}.real-research-controls{display:flex;gap:16px;flex-wrap:wrap;margin-top:20px}.real-research-controls label{display:grid;gap:8px;font-size:12px;color:var(--muted)}select{background:var(--bg);color:var(--text);padding:10px;border:1px solid var(--border);border-radius:6px}</style>
+<style scoped>.history-search{margin-bottom:24px}.history-search>p{margin-top:10px}.history-controls{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}.history-controls label{display:flex;align-items:center;gap:12px}.history-note{margin-top:20px}</style>

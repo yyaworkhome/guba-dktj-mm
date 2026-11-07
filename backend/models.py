@@ -140,3 +140,59 @@ class ProviderQuery(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     status: Mapped[str] = mapped_column(String(16))
     result: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class UniverseSync(Base):
+    __tablename__ = 'universe_syncs'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default='running')
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    members: Mapped[list] = mapped_column(JSON, default=list)
+    error: Mapped[str] = mapped_column(String(500), default='')
+
+
+class MarketScan(Base):
+    __tablename__ = 'market_scans'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    universe_id: Mapped[int] = mapped_column(ForeignKey('universe_syncs.id'))
+    # Nullable unique keys prevent overlapping jobs and duplicate daily submissions.
+    active_key: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
+    scheduled_date: Mapped[str | None] = mapped_column(String(10), unique=True, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default='queued')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    days: Mapped[int] = mapped_column(Integer, default=3)
+    total: Mapped[int] = mapped_column(Integer)
+    cancel_requested: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(String(500), default='')
+
+
+class ScanItem(Base):
+    __tablename__ = 'market_scan_items'
+    __table_args__ = (UniqueConstraint('scan_id', 'instrument_id'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey('market_scans.id'), index=True)
+    instrument_id: Mapped[str] = mapped_column(ForeignKey('instruments.id'), index=True)
+    status: Mapped[str] = mapped_column(String(20), default='pending')
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ScanSchedule(Base):
+    __tablename__ = 'scan_schedule'
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    enabled: Mapped[int] = mapped_column(Integer, default=0)
+    hour: Mapped[int] = mapped_column(Integer, default=16)
+    minute: Mapped[int] = mapped_column(Integer, default=10)
+
+
+class DecisionRecord(Base):
+    """Research plans only; no account balances, holdings or executable orders."""
+    __tablename__ = 'decision_records'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[str] = mapped_column(ForeignKey('instruments.id'),index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
+    version: Mapped[str] = mapped_column(String(40))
+    result: Mapped[dict] = mapped_column(JSON)

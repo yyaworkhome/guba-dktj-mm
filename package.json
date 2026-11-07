@@ -8,6 +8,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "vue-tsc --noEmit",
+    "test:risk": "node --experimental-strip-types --test src/lib/risk.test.mjs",
     "android:sync": "npm run build && cap sync android",
     "android:add": "cap add android",
     "desktop:dev": "tauri dev",

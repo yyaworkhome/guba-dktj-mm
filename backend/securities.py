@@ -111,6 +111,8 @@ def local_matches(db, q):
     q=q.lower()
     result=[]
     for i in db.scalars(select(Instrument).where(Instrument.kind=='stock')):
+        try: stock(i.id)
+        except ValueError: continue
         meta=(i.scope or {}).get('live_directory') or {}
         if i.id not in STOCKS and not meta: continue
         name=meta.get('name',i.name)

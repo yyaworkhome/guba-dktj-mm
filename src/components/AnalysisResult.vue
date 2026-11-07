@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { BookmarkPlus, Download, Info } from "lucide-vue-next";
+import { Download, Info } from "lucide-vue-next";
 import TrendChart from "./TrendChart.vue";
 import { exportURL } from "../api";
 import type { Analysis } from "../types";
 const props = defineProps<{ analysis: Analysis }>();
-defineEmits<{ watch: []; backtest: [] }>();
+defineEmits<{ backtest: [] }>();
 const m = computed(() => props.analysis.metrics);
 const fmt = (n: number) =>
   n >= 10000 ? `${(n / 10000).toFixed(1)}万` : n.toLocaleString("zh-CN");
@@ -28,14 +28,7 @@ const weights = [
             模拟快照
           </p>
         </div>
-        <button
-          class="icon-button"
-          aria-label="加入自选"
-          title="加入自选"
-          @click="$emit('watch')"
-        >
-          <BookmarkPlus :size="19" />
-        </button>
+
       </div>
       <div class="score-line">
         <div>

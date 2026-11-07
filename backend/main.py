@@ -26,13 +26,20 @@ from .live_private import router as live_private_router
 from .local_collection import router as local_collection_router
 from .securities import router as securities_router
 from .live_export import router as live_export_router
+from .market_scan import router as market_scan_router
+from .scanner import worker
+from .decision import router as decision_router
 
 @asynccontextmanager
 async def lifespan(app):
     Base.metadata.create_all(engine)
     if os.getenv('SEED_DEMO', 'true').lower() == 'true':
         with SessionLocal() as db: seed(db)
-    yield
+    worker.start()
+    try:
+        yield
+    finally:
+        worker.close()
 
 app = FastAPI(title='散户情绪量化 API', version='2.0.0', lifespan=lifespan)
 app.include_router(mx_router)
@@ -40,6 +47,8 @@ app.include_router(live_private_router)
 app.include_router(local_collection_router)
 app.include_router(securities_router)
 app.include_router(live_export_router)
+app.include_router(market_scan_router)
+app.include_router(decision_router)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,https://localhost,http://tauri.localhost,tauri://localhost').split(','), allow_credentials=False, allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Authorization','Content-Type'])
 
 @app.middleware('http')
